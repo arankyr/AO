@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Argentum Online · Arena 1v1</title>
+<title>Argentum Online · Arena PvP</title>
 <link rel="icon" href="data:,">
 <style>
 *{box-sizing:border-box}
@@ -41,7 +41,7 @@ button:disabled{opacity:.5;cursor:default}
 <canvas id="game"></canvas>
 <div id="lobby"><div class="box">
  <h1>ARGENTUM ONLINE</h1>
- <div class="sub">ARENA 1 VS 1 · ESTILO 0.9.9Z · PEER TO PEER</div>
+ <div class="sub">ARENA PVP · HASTA 8 JUGADORES · ESTILO 0.9.9Z</div>
  <label>Nombre</label>
  <input id="name" type="text" maxlength="14" placeholder="Tu nick" autocomplete="off">
  <label>Clase</label>
@@ -119,7 +119,7 @@ const CD={spell:1.0, hit:1.0, arrow:1.15, combo:0.45, pot:0.38};
 const REVIVE_TIME=5;
 const DX=[0,0,-1,1], DY=[1,-1,0,0];  // 0 abajo, 1 arriba, 2 izq, 3 der
 const PREFIX='ao099z-arena1v1-';
-const SPAWN=[{x:5,y:13},{x:MW-6,y:14}];
+const SPAWN=[{x:5,y:13},{x:30,y:14},{x:8,y:21},{x:27,y:6},{x:17,y:4},{x:18,y:23},{x:11,y:9},{x:24,y:19}];
 const PARTS=['la cabeza','el torso','el brazo izquierdo','el brazo derecho','la pierna izquierda','la pierna derecha'];
 const COL={info:'#d6d6d6',dmg:'#ff4a3a',spell:'#f0c060',heal:'#6fe36f',sys:'#ffd24a',chat:'#ffffff',words:'#9fe0ff',kill:'#ff9a2a'};
 
@@ -617,10 +617,12 @@ function sfx(k,vol=1){
 // =====================================================================
 const canvas=$('#game'), ctx=canvas.getContext('2d');
 let sc=1, offX=0, offY=0, dpr=1;
-let started=false, me=null, opp=null, isHost=false, roomCode='';
+let started=false, me=null, isHost=false, roomCode='', myId='';
+const players=new Map();          // id -> personaje (todos menos yo)
+const MAX_PLAYERS=8;
 let tab=0, selSlot=0, selSpell=0, targeting=false, typing=false, chatBuf='';
 let lastSpell=-9, lastHit=-9, lastPot=-9, nextTick=0;
-let myKills=0, oppKills=0, ping=0, fps=60;
+let ping=0, fps=60;
 let consoleLines=[], fxs=[], floats=[];
 let camX=0, camY=0, mouse={x:0,y:0,inView:false};
 let held=[], inv=[], lastThrottled={};
@@ -629,9 +631,9 @@ let uiBg=null;
 
 function newChar(o){
   const C=CLASSES[o.cls];
-  return {name:o.name,cls:o.cls,fac:o.fac,tx:o.x,ty:o.y,fx:o.x,fy:o.y,prog:1,moving:false,dir:0,stepPar:0,
-    hp:C.hp,mhp:C.hp,mp:C.mp,mmp:C.mp,en:C.en,men:C.en,dead:false,para:0,inmo:0,invis:false,invisUntil:0,
-    med:false,medStart:0,atkUntil:0,say:null,reviveAt:0};
+  return {id:o.id,name:o.name,cls:o.cls,fac:o.fac,tx:o.x,ty:o.y,fx:o.x,fy:o.y,prog:1,moving:false,dir:o.d||0,stepPar:0,
+    hp:C.hp,mhp:C.hp,mp:C.mp,mmp:C.mp,en:C.en,men:C.en,dead:!!o.dead,para:0,inmo:0,invis:!!o.inv,invisUntil:0,
+    med:!!o.med,medStart:0,atkUntil:0,say:null,reviveAt:0,kills:o.k|0,deaths:o.dd|0};
 }
 function rpos(c){ if(!c.moving) return [c.tx,c.ty]; return [c.fx+(c.tx-c.fx)*c.prog, c.fy+(c.ty-c.fy)*c.prog]; }
 function occupies(c,x,y){
@@ -639,6 +641,32 @@ function occupies(c,x,y){
   if(c.moving&&c.prog<.5&&Math.round(c.fx)===x&&Math.round(c.fy)===y) return true;
   return false;
 }
+const allChars=()=>me?[me,...players.values()]:[...players.values()];
+const charById=id=>id===myId?me:players.get(id);
+function charAtTile(x,y){ for(const c of players.values()) if(!c.dead&&occupies(c,x,y)) return c; return null; }
+// personaje bajo el cursor: su baldosa + media baldosa hacia arriba (solo alto, el ancho es 1 tile)
+function pickChar(wx,wy){
+  let best=null, bs=-1;
+  const col=Math.floor(wx/T);
+  for(const c of allChars()){
+    if(c.dead||col!==c.tx) continue;
+    if(wy<(c.ty-.5)*T||wy>=(c.ty+1)*T) continue;
+    const score=(wy>=c.ty*T?2:1)+c.ty/1e6;
+    if(score>bs){bs=score;best=c}
+  }
+  return best;
+}
+function freeSpawn(){
+  let best=SPAWN[0], bd=-1;
+  for(const s of SPAWN){
+    let d=999;
+    for(const c of allChars()){ if(c===me&&!started) continue; d=Math.min(d,Math.abs(c.tx-s.x)+Math.abs(c.ty-s.y)); }
+    d+=Math.random()*3;
+    if(d>bd){bd=d;best=s}
+  }
+  return best;
+}
+function cleanName(n){return String(n||'Jugador').replace(/[<>]/g,'').slice(0,14)||'Jugador'}
 function logm(txt,col){
   consoleLines.push({txt,col:col||COL.info});
   if(consoleLines.length>80) consoleLines.splice(0,consoleLines.length-80);
@@ -648,119 +676,167 @@ function dirty(){stDirty=true}
 function say(c,txt,col,dur){c.say={txt,col,until:now()+(dur||2.6)}}
 
 // =====================================================================
-//  Red: PeerJS (o BroadcastChannel con #local para pruebas)
+//  Red: el que crea la sala es el anfitrión y reenvía los mensajes
+//  (PeerJS, o BroadcastChannel con #local para pruebas)
 // =====================================================================
 const LOCAL=location.hash==='#local';
-const Net={peer:null,conn:null,bc:null,connected:false,myId:'',pingTimer:0};
+const Net={peer:null,host:null,links:new Map(),bc:null,connected:false,pingTimer:0,nextPid:1,lid:''};
+function rawSend(link,o){ try{ link.send(o) }catch(e){} }
 function netSend(o){
-  if(!Net.connected) return;
-  try{
-    if(LOCAL){Net.bc.postMessage({f:Net.myId,d:o});return}
-    if(Net.conn&&Net.conn.open) Net.conn.send(o);
-  }catch(e){}
+  if(!started) return;
+  o.from=myId;
+  if(isHost){
+    if(o.to){ const L=Net.links.get(o.to); if(L) rawSend(L,o); }
+    else for(const L of Net.links.values()) rawSend(L,o);
+  } else if(Net.host&&Net.connected) rawSend(Net.host,o);
 }
 function genCode(){const A='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let s='';for(let i=0;i<5;i++)s+=A[Math.floor(Math.random()*A.length)];return s}
 function lobbyStatus(t,err){const s=$('#status');s.textContent=t;s.className=err?'err':''}
 function setLobbyBusy(b){$('#btnCreate').disabled=b;$('#btnJoin').disabled=b}
+function myInfo(){return {t:'hi',v:2,name:cleanName($('#name').value.trim()),cls:lobbyCls,fac:lobbyFac}}
 
+// ---------- anfitrión ----------
 function hostRoom(){
-  isHost=true; roomCode=genCode(); setLobbyBusy(true);
+  isHost=true; myId='h'; roomCode=genCode(); setLobbyBusy(true);
   if(LOCAL){
-    Net.myId='h'+Math.random(); Net.bc=new BroadcastChannel('ao-'+roomCode);
-    Net.bc.onmessage=e=>{const m=e.data;if(m.f===Net.myId)return;
-      if(m.d.t==='__join'){ if(Net.connected) return; Net.connected=true; Net.bc.postMessage({f:Net.myId,d:{t:'__ok'}}); onConnected(); }
-      else if(Net.connected) onMsg(m.d)};
-    startGame(); return;
+    Net.lid='HOST'; Net.bc=new BroadcastChannel('ao-'+roomCode); const local=new Map();
+    Net.bc.onmessage=e=>{ const m=e.data; if(m.to!=='HOST') return;
+      let L=local.get(m.f);
+      if(!L){ L={pid:null,send:o=>Net.bc.postMessage({f:'HOST',to:m.f,d:o}),close(){}}; local.set(m.f,L); }
+      if(m.d&&m.d.t==='bye'){ hostDrop(L); local.delete(m.f); return; }
+      hostReceive(L,m.d);
+    };
+    startGame(SPAWN[0]); netState='Anfitrión'; return;
   }
   if(typeof Peer==='undefined'){lobbyStatus('No se pudo cargar PeerJS.',true);setLobbyBusy(false);return}
   lobbyStatus('Creando sala...');
   const peer=new Peer(PREFIX+roomCode,{debug:1}); Net.peer=peer;
-  peer.on('open',()=>{ if(!started) startGame(); netState='Esperando rival'; });
+  peer.on('open',()=>{ if(!started) startGame(SPAWN[0]); netState='Anfitrión'; });
   peer.on('connection',c=>{
-    if(Net.conn&&Net.conn.open){ c.on('open',()=>{try{c.send({t:'full'})}catch(e){} setTimeout(()=>c.close(),600)}); return; }
-    setupConn(c);
+    const L={pid:null,send:o=>c.send(o),close:()=>c.close()};
+    c.on('data',d=>hostReceive(L,d));
+    c.on('close',()=>hostDrop(L));
+    c.on('error',()=>{});
   });
   peer.on('disconnected',()=>{ setTimeout(()=>{try{if(!peer.destroyed)peer.reconnect()}catch(e){}},1500) });
   peer.on('error',e=>{
     if(e.type==='unavailable-id'){ peer.destroy(); if(!started){hostRoom()} return; }
+    if(e.type==='peer-unavailable') return;
     if(!started){lobbyStatus('Error de conexión: '+(e.type||e.message),true);setLobbyBusy(false)}
     else logm('Error de red: '+(e.type||e.message),COL.dmg);
   });
 }
-function joinRoom(code){
-  isHost=false; roomCode=code; setLobbyBusy(true);
-  if(LOCAL){
-    Net.myId='g'+Math.random(); Net.bc=new BroadcastChannel('ao-'+code);
-    Net.bc.onmessage=e=>{const m=e.data;if(m.f===Net.myId)return;
-      if(m.d.t==='__ok'){ if(Net.connected) return; Net.connected=true; startGame(); onConnected(); }
-      else if(Net.connected) onMsg(m.d)};
-    Net.bc.postMessage({f:Net.myId,d:{t:'__join'}});
-    setTimeout(()=>{if(!Net.connected){lobbyStatus('No existe ninguna sala con ese código.',true);setLobbyBusy(false)}},2500);
+function rosterEntry(c){return {id:c.id,name:c.name,cls:c.cls,fac:c.fac,x:c.tx,y:c.ty,d:c.dir,dead:c.dead?1:0,inv:c.invis?1:0,med:c.med?1:0,k:c.kills,dd:c.deaths}}
+function hostReceive(L,m){
+  if(!m||!m.t) return;
+  if(m.t==='hi'){
+    if(L.pid) return;
+    if(players.size+1>=MAX_PLAYERS){ rawSend(L,{t:'full'}); setTimeout(()=>L.close(),800); return; }
+    const pid='p'+(Net.nextPid++); L.pid=pid; Net.links.set(pid,L);
+    const sp=freeSpawn();
+    const c=newChar({id:pid,name:cleanName(m.name),cls:CLASSES[m.cls]?m.cls:'mago',fac:m.fac==='k'?'k':'c',x:sp.x,y:sp.y});
+    const roster=allChars().map(rosterEntry);
+    players.set(pid,c);
+    rawSend(L,{t:'welcome',from:myId,you:pid,sx:sp.x,sy:sp.y,roster});
+    for(const [p2,L2] of Net.links) if(p2!==pid) rawSend(L2,{t:'join',from:myId,...rosterEntry(c)});
+    logm(c.name+' ('+CLASSES[c.cls].n+') ha entrado a la arena.',COL.sys); sfx('msg');
     return;
   }
-  if(typeof Peer==='undefined'){lobbyStatus('No se pudo cargar PeerJS.',true);setLobbyBusy(false);return}
+  if(!L.pid) return;
+  m.from=L.pid;                                   // nadie puede hacerse pasar por otro
+  if(m.t==='ping'){ rawSend(L,{t:'pong',ts:m.ts}); return; }
+  if(m.to&&m.to!==myId){ const L2=Net.links.get(m.to); if(L2) rawSend(L2,m); return; }
+  if(!m.to) for(const [p2,L2] of Net.links) if(p2!==L.pid) rawSend(L2,m);
+  onMsg(m);
+}
+function hostDrop(L){
+  if(!L.pid||!Net.links.has(L.pid)) return;
+  Net.links.delete(L.pid);
+  const c=players.get(L.pid); players.delete(L.pid);
+  if(c) logm(c.name+' se ha desconectado.',COL.sys);
+  for(const L2 of Net.links.values()) rawSend(L2,{t:'leave',from:myId,id:L.pid});
+}
+
+// ---------- invitado ----------
+function joinRoom(code){
+  isHost=false; roomCode=code; setLobbyBusy(true);
+  let to=null;
+  const fail=(msg)=>{clearTimeout(to); if(!started){lobbyStatus(msg,true);setLobbyBusy(false)}};
+  if(LOCAL){
+    Net.lid='g'+Math.random().toString(36).slice(2); Net.bc=new BroadcastChannel('ao-'+code);
+    Net.host={send:o=>Net.bc.postMessage({f:Net.lid,to:'HOST',d:o}),close(){}};
+    Net.bc.onmessage=e=>{const m=e.data; if(m.to===Net.lid) guestReceive(m.d)};
+    addEventListener('pagehide',()=>rawSend(Net.host,{t:'bye'}));
+    rawSend(Net.host,myInfo());
+    to=setTimeout(()=>{if(!Net.connected)fail('No existe ninguna sala con ese código.')},2500);
+    return;
+  }
+  if(typeof Peer==='undefined'){fail('No se pudo cargar PeerJS.');return}
   lobbyStatus('Conectando a la sala '+code+'...');
   const peer=new Peer(PREFIX+'g-'+genCode()+genCode(),{debug:1}); Net.peer=peer;
-  let to=null;
   peer.on('open',()=>{
     const c=peer.connect(PREFIX+code,{reliable:true,serialization:'json'});
-    setupConn(c);
-    to=setTimeout(()=>{if(!Net.connected){lobbyStatus('No se pudo conectar. Revisá el código o probá de nuevo.',true);setLobbyBusy(false)}},15000);
+    Net.host={send:o=>c.send(o),close:()=>c.close()};
+    c.on('open',()=>rawSend(Net.host,myInfo()));
+    c.on('data',d=>guestReceive(d));
+    c.on('close',()=>guestLost());
+    c.on('error',()=>{});
+    to=setTimeout(()=>{if(!Net.connected)fail('No se pudo conectar. Revisá el código o probá de nuevo.')},15000);
   });
   peer.on('error',e=>{
     if(started){logm('Error de red: '+(e.type||e.message),COL.dmg);return}
-    clearTimeout(to);
-    lobbyStatus(e.type==='peer-unavailable'?'No existe ninguna sala con ese código.':'Error de conexión: '+(e.type||e.message),true);
-    setLobbyBusy(false);
+    fail(e.type==='peer-unavailable'?'No existe ninguna sala con ese código.':'Error de conexión: '+(e.type||e.message));
   });
 }
-function setupConn(c){
-  Net.conn=c;
-  c.on('open',()=>{ Net.connected=true; if(!started) startGame(); onConnected(); });
-  c.on('data',d=>{ if(c===Net.conn) onMsg(d) });
-  c.on('close',()=>{ if(c===Net.conn) onDisconnect() });
-  c.on('error',()=>{});
+function guestReceive(m){
+  if(!m||!m.t) return;
+  switch(m.t){
+    case 'welcome':
+      if(Net.connected) return;
+      Net.connected=true; myId=m.you; netState='Conectado';
+      startGame({x:m.sx,y:m.sy}); me.id=myId;
+      for(const r of m.roster) if(r.id!==myId) players.set(r.id,newChar({...r,cls:CLASSES[r.cls]?r.cls:'mago',name:cleanName(r.name)}));
+      logm('Hay '+(players.size+1)+' jugadores en la arena.',COL.sys);
+      clearInterval(Net.pingTimer); Net.pingTimer=setInterval(()=>netSend({t:'ping',ts:performance.now()}),2000);
+      sendState(); sendMv(true); return;
+    case 'full': lobbyStatus('La sala está llena ('+MAX_PLAYERS+' jugadores).',true); setLobbyBusy(false); return;
+    case 'pong': ping=Math.round(performance.now()-m.ts); return;
+    case 'join': if(m.id!==myId&&!players.has(m.id)){ players.set(m.id,newChar({...m,cls:CLASSES[m.cls]?m.cls:'mago',name:cleanName(m.name)})); logm(cleanName(m.name)+' ('+CLASSES[players.get(m.id).cls].n+') ha entrado a la arena.',COL.sys); sfx('msg'); } return;
+    case 'leave': { const c=players.get(m.id); players.delete(m.id); if(c) logm(c.name+' se ha desconectado.',COL.sys); return; }
+  }
+  if(started) onMsg(m);
 }
-function onConnected(){
-  netState='Conectado';
-  netSend({t:'hi',v:1,name:me.name,cls:me.cls,fac:me.fac});
-  clearInterval(Net.pingTimer);
-  Net.pingTimer=setInterval(()=>netSend({t:'ping',ts:performance.now()}),2000);
-}
-function onDisconnect(){
-  Net.connected=false; Net.conn=null; clearInterval(Net.pingTimer);
-  if(opp) logm(opp.name+' se ha desconectado.',COL.sys);
-  opp=null; myKills=0; oppKills=0;
-  if(isHost){netState='Esperando rival'; logm('La sala sigue abierta. Código: '+roomCode,COL.sys)}
-  else{netState='Desconectado'; logm('Se perdió la conexión. Recargá la página (F5) para volver a unirte.',COL.dmg)}
+function guestLost(){
+  if(!started){ if(!Net.connected){lobbyStatus('Se cortó la conexión con la sala.',true);setLobbyBusy(false)} return; }
+  Net.connected=false; clearInterval(Net.pingTimer); players.clear(); netState='Desconectado';
+  logm('Se perdió la conexión con la sala. Recargá la página (F5) para volver a unirte.',COL.dmg);
 }
 
+// ---------- mensajes de juego (comunes) ----------
 function onMsg(m){
-  if(!m||!m.t) return;
+  const s=players.get(m.from); if(!s) return;
   const t=now();
   switch(m.t){
-    case 'full': logm('La sala está llena.',COL.dmg); break;
-    case 'hi': {
-      const sp=SPAWN[isHost?1:0];
-      opp=newChar({name:String(m.name||'Rival').slice(0,14),cls:CLASSES[m.cls]?m.cls:'mago',fac:m.fac==='k'?'k':'c',x:sp.x,y:sp.y});
-      logm(opp.name+' ('+CLASSES[opp.cls].n+') ha entrado a la arena.',COL.sys); sfx('msg');
-      netSend({t:'mv',x:me.tx,y:me.ty,d:me.dir,s:1}); sendState(); break;
+    case 'mv': remoteMove(s,m.x|0,m.y|0,m.d|0,m.s); break;
+    case 'st': s.hp=m.hp;s.mhp=m.mhp;s.mp=m.mp;s.mmp=m.mmp;s.invis=!!m.inv;s.para=m.par?1:0;s.inmo=m.inm?1:0;
+      if(m.med&&!s.med)s.medStart=t; s.med=!!m.med; if(s.dead&&!m.dead) addFx('revive',s); s.dead=!!m.dead; break;
+    case 'say': say(s,String(m.txt).slice(0,90),m.k==='c'?COL.chat:COL.words,m.k==='c'?6:2.6); if(m.k==='c'){logm(s.name+': '+m.txt,COL.chat);sfx('msg')} break;
+    case 'swing': s.atkUntil=t+.25; if(near(s)) sfx('swing',.5); break;
+    case 'fx': { const tc=charById(m.tgt); if(tc){ addFx(m.k,tc,s); if(m.snd&&(tc===me||near(tc))) sfx(m.snd,tc===me?1:.7); } break; }
+    case 'act': onAct(m,s); break;
+    case 'hit': onHit(m,s); break;
+    case 'miss': if(!me.dead) logm('¡'+s.name+' te atacó y falló!',COL.dmg); break;
+    case 'res': onRes(m,s); break;
+    case 'death': {
+      s.dead=true; s.deaths++; addFx('death',s);
+      const k=m.killer?charById(m.killer):null;
+      if(k){ k.kills++; if(k===me){logm('¡Has matado a '+s.name+'!',COL.kill); sfx('death',.7)} else logm(k.name+' ha matado a '+s.name+'.',COL.kill); }
+      else logm(s.name+' ha muerto.',COL.kill);
+      break;
     }
-    case 'ping': netSend({t:'pong',ts:m.ts}); break;
-    case 'pong': ping=Math.round(performance.now()-m.ts); break;
-    case 'mv': if(opp) remoteMove(opp,m.x|0,m.y|0,m.d|0,m.s); break;
-    case 'st': if(opp){ opp.hp=m.hp;opp.mhp=m.mhp;opp.mp=m.mp;opp.mmp=m.mmp;opp.invis=!!m.inv;opp.para=m.par?1:0;opp.inmo=m.inm?1:0;
-        if(m.med&&!opp.med)opp.medStart=t; opp.med=!!m.med; if(opp.dead&&!m.dead){addFx('revive',opp)} opp.dead=!!m.dead; } break;
-    case 'say': if(opp){ say(opp,String(m.txt).slice(0,90),m.k==='c'?COL.chat:COL.words,m.k==='c'?6:2.6); if(m.k==='c'){logm(opp.name+': '+m.txt,COL.chat);sfx('msg')} } break;
-    case 'swing': if(opp){opp.atkUntil=t+.25; sfx('swing',.6)} break;
-    case 'fx': if(opp){ const on=m.on==='s'?opp:me; addFx(m.k,on,opp); if(m.snd)sfx(m.snd,on===me?1:.8);} break;
-    case 'act': onAct(m); break;
-    case 'hit': onHit(m); break;
-    case 'miss': if(opp&&!me.dead) logm('¡'+opp.name+' te atacó y falló!',COL.dmg); break;
-    case 'res': onRes(m); break;
-    case 'death': if(opp){ myKills++; opp.dead=true; logm('¡Has matado a '+opp.name+'!',COL.kill); addFx('death',opp); sfx('death',.7);} break;
   }
 }
+function near(c){return me&&Math.abs(c.tx-me.tx)<=9&&Math.abs(c.ty-me.ty)<=7}
 function remoteMove(c,x,y,d,snap){
   c.dir=d;
   if(snap){c.fx=c.tx=x;c.fy=c.ty=y;c.prog=1;c.moving=false;return}
@@ -788,19 +864,18 @@ function startTargeting(){
   const sid=CLASSES[me.cls].spells[selSpell]; if(!sid) return;
   targeting=true;
 }
-function castAt(tx,ty){
+// wx,wy: posición en píxeles de mundo donde se hizo click
+function castAt(wx,wy){
   const t=now(), C=CLASSES[me.cls], sid=C.spells[selSpell], sp=SPELLS[sid];
   if(!sp){targeting=false;return}
   if(me.dead){targeting=false;logm('¡Estás muerto!',COL.dmg);return}
   const cd=sp.type==='arrow'?CD.arrow:CD.spell;
   if(t-lastSpell<cd||t-lastHit<CD.combo) return;          // sigue apuntando
-  let target=null;
-  if(tx===me.tx&&ty===me.ty) target=me;
-  else if(opp&&!opp.dead&&occupies(opp,tx,ty)) target=opp;
+  const target=pickChar(wx,wy);
   targeting=false;
   if(!target){logm('Target inválido.',COL.info);return}
   if(isOffensive(sp)&&target===me){logm('No puedes atacarte a ti mismo.',COL.info);return}
-  if(Math.abs(tx-me.tx)>8||Math.abs(ty-me.ty)>6){logm('Estás demasiado lejos.',COL.info);return}
+  if(Math.abs(target.tx-me.tx)>8||Math.abs(target.ty-me.ty)>6){logm('Estás demasiado lejos.',COL.info);return}
   if(sp.type==='remo'&&target===me&&!me.para&&!me.inmo){logm('No estás paralizado.',COL.info);return}
   if(me.mp<sp.mana){logm('No tienes suficiente maná.',COL.info);return}
   if(sp.type==='arrow'){
@@ -810,13 +885,13 @@ function castAt(tx,ty){
   me.mp-=sp.mana; lastSpell=t; if(me.med){me.med=false}
   if(isOffensive(sp)) revealIfInvis();
   if(sp.words){say(me,sp.words,COL.words);netSend({t:'say',txt:sp.words,k:'w'})}
-  if(sp.type==='arrow'){ if(tx!==me.tx) me.dir=tx<me.tx?2:3; else me.dir=ty<me.ty?1:0; sendMv(); }
+  if(sp.type==='arrow'&&target!==me){ const dx=target.tx-me.tx, dy=target.ty-me.ty; me.dir=Math.abs(dx)>=Math.abs(dy)?(dx<0?2:3):(dy<0?1:0); sendMv(); }
   addFx(sp.fx,target,me); sfx(sp.snd);
-  netSend({t:'fx',k:sp.fx,on:target===me?'s':'r',snd:sp.snd});
+  netSend({t:'fx',k:sp.fx,tgt:target.id,snd:sp.snd});
   let raw=0;
   if(sp.min!=null){ raw=irnd(sp.min,sp.max); if(sp.type==='dmg'||sp.type==='heal') raw=Math.round(raw*C.mag*(sp.type==='heal'&&me.cls==='clerigo'?1.3:1)); }
   if(target===me){ logm('Has lanzado '+sp.n+' sobre ti mismo.',COL.spell); applySpell(sid,raw,me); }
-  else { if(sp.type!=='arrow') logm('Has lanzado '+sp.n+' sobre '+opp.name+'.',COL.spell); netSend({t:'act',s:sid,raw}); }
+  else { if(sp.type!=='arrow') logm('Has lanzado '+sp.n+' sobre '+target.name+'.',COL.spell); netSend({t:'act',to:target.id,s:sid,raw}); }
   dirty();
 }
 // aplica un hechizo sobre MI personaje
@@ -834,35 +909,34 @@ function applySpell(sid,raw,from){
   }
   dirty(); return a;
 }
-function onAct(m){
-  if(!opp||me.dead||!SPELLS[m.s]) return;
-  const a=applySpell(m.s,Number(m.raw)||0,opp);
-  netSend({t:'res',s:m.s,a});
-  checkDeath(opp);
+function onAct(m,s){
+  if(me.dead||!SPELLS[m.s]) return;
+  const a=applySpell(m.s,Number(m.raw)||0,s);
+  netSend({t:'res',to:s.id,s:m.s,a});
+  checkDeath(s);
 }
-function onHit(m){
-  if(!opp||me.dead) return;
+function onHit(m,s){
+  if(me.dead) return;
   const C=CLASSES[me.cls];
   const a=Math.max(1,Math.round((Number(m.raw)||0)-irnd(C.def>>1,C.def)));
   const part=PARTS[irnd(0,5)];
   me.hp-=a; addFloat(me,'-'+a,'#ff4040'); addFx('blood',me); sfx('hit');
-  logm(m.stab?'¡'+opp.name+' te ha apuñalado por '+a+'!':'¡'+opp.name+' te ha pegado en '+part+' por '+a+'!',COL.dmg);
+  logm(m.stab?'¡'+s.name+' te ha apuñalado por '+a+'!':'¡'+s.name+' te ha pegado en '+part+' por '+a+'!',COL.dmg);
   dirty();
-  netSend({t:'res',s:'melee',a,p:part,stab:m.stab?1:0});
-  checkDeath(opp);
+  netSend({t:'res',to:s.id,s:'melee',a,p:part,stab:m.stab?1:0});
+  checkDeath(s);
 }
-function onRes(m){
-  if(!opp) return;
-  const n=opp.name, a=m.a|0;
+function onRes(m,v){
+  const n=v.name, a=m.a|0;
   if(m.s==='melee'){
     logm(m.stab?'¡Has apuñalado a '+n+' por '+a+'!':'¡Le has pegado a '+n+' en '+m.p+' por '+a+'!',COL.dmg);
-    addFloat(opp,'-'+a,m.stab?'#ffb030':'#ff4040'); return;
+    addFloat(v,'-'+a,m.stab?'#ffb030':'#ff4040'); return;
   }
   const sp=SPELLS[m.s]; if(!sp) return;
   switch(sp.type){
-    case 'dmg': logm('¡Le has quitado '+a+' puntos de vida a '+n+'!',COL.dmg); addFloat(opp,'-'+a,'#ff4040'); break;
-    case 'arrow': logm('¡Le has disparado a '+n+' por '+a+'!',COL.dmg); addFloat(opp,'-'+a,'#ff4040'); break;
-    case 'heal': logm('Has curado '+a+' puntos de vida a '+n+'.',COL.heal); break;
+    case 'dmg': logm('¡Le has quitado '+a+' puntos de vida a '+n+'!',COL.dmg); addFloat(v,'-'+a,'#ff4040'); break;
+    case 'arrow': logm('¡Le has disparado a '+n+' por '+a+'!',COL.dmg); addFloat(v,'-'+a,'#ff4040'); break;
+    case 'heal': logm('Has curado '+a+' puntos de vida a '+n+'.',COL.heal); addFloat(v,'+'+a,'#60ff60'); break;
     case 'para': logm(n+' ha sido paralizado.',COL.spell); break;
     case 'inmo': logm(n+' ha sido inmovilizado.',COL.spell); break;
     case 'remo': logm(n+' ya no está paralizado.',COL.spell); break;
@@ -872,15 +946,18 @@ function onRes(m){
 function checkDeath(from){
   if(me.dead||me.hp>0) return;
   me.hp=0; me.dead=true; me.reviveAt=now()+REVIVE_TIME; me.med=false; me.para=0; me.inmo=0; me.invis=false; targeting=false;
-  logm('¡Has muerto!',COL.dmg); sfx('death'); addFx('death',me);
-  if(from&&from!==me){oppKills++; netSend({t:'death'})}
+  me.deaths++;
+  const killer=from&&from!==me?from:null;
+  if(killer){ killer.kills++; logm('¡'+killer.name+' te ha matado!',COL.dmg); } else logm('¡Has muerto!',COL.dmg);
+  sfx('death'); addFx('death',me);
+  netSend({t:'death',killer:killer?killer.id:null});
   dirty(); sendState();
 }
 function revive(){
-  const sp=SPAWN[isHost?0:1];
+  const sp=freeSpawn();
   me.dead=false; me.hp=me.mhp; me.mp=me.mmp; me.en=me.men;
-  me.tx=me.fx=sp.x; me.ty=me.fy=sp.y; me.prog=1; me.moving=false; me.dir=isHost?3:2;
-  if(opp&&occupies(opp,me.tx,me.ty)){me.ty-=1;me.fy=me.ty}
+  me.tx=me.fx=sp.x; me.ty=me.fy=sp.y; me.prog=1; me.moving=false; me.dir=0;
+  if(charAtTile(me.tx,me.ty)){me.ty-=1;me.fy=me.ty}
   logm('Has resucitado.',COL.heal); sfx('revive'); addFx('revive',me);
   sendMv(true); dirty(); sendState();
 }
@@ -892,14 +969,14 @@ function melee(){
   if(me.en<10){logThrottle('en','Estás muy cansado para luchar.',COL.info);return}
   lastHit=t; me.en-=10; me.atkUntil=t+.25; me.med=false;
   netSend({t:'swing'}); revealIfInvis();
-  const nx=me.tx+DX[me.dir], ny=me.ty+DY[me.dir];
-  if(opp&&!opp.dead&&occupies(opp,nx,ny)){
+  const target=charAtTile(me.tx+DX[me.dir],me.ty+DY[me.dir]);
+  if(target){
     const C=CLASSES[me.cls];
     if(Math.random()<C.acc){
       let raw=irnd(C.hit[0],C.hit[1]), stab=false;
       if(C.stab&&Math.random()<C.stab){raw=Math.round(raw*1.6);stab=true}
-      netSend({t:'hit',raw,stab}); sfx('hit'); addFx('blood',opp);
-    } else { logm('¡Has fallado el golpe!',COL.info); netSend({t:'miss'}); sfx('swing'); }
+      netSend({t:'hit',to:target.id,raw,stab}); sfx('hit'); addFx('blood',target);
+    } else { logm('¡Has fallado el golpe!',COL.info); netSend({t:'miss',to:target.id}); sfx('swing'); }
   } else sfx('swing');
   dirty();
 }
@@ -927,7 +1004,6 @@ function toggleMed(){
   if(me.mp>=me.mmp){logm('Tu maná está completo.',COL.info);return}
   me.med=true; me.medStart=now(); logm('Comienzas a meditar.',COL.info); dirty();
 }
-
 // =====================================================================
 //  Efectos visuales
 // =====================================================================
@@ -1081,7 +1157,7 @@ function drawWorld(t){
   const list=[];
   for(const o of objects){ if(o.x<x0-2||o.x>x1+2||o.y<y0||o.y>y1+4) continue; list.push({y:o.y*T+32,o}); }
   list.push({y:fountain.y*T+64,fountain:true});
-  const chars=[me]; if(opp) chars.push(opp);
+  const chars=allChars();
   for(const c of chars){const [cx,cy]=rpos(c); list.push({y:cy*T+32.5,c,cx,cy})}
   list.sort((a,b)=>a.y-b.y);
   const meScreen=[SX(mx)+4,SY(my)-26,24,58];
@@ -1124,8 +1200,8 @@ function drawWorld(t){
     txt('¡Estás muerto!',VIEW.x+VIEW.w/2,VIEW.y+60,'#ff5040','bold 22px Georgia, serif','center');
     txt('Resucitarás en '+Math.max(1,Math.ceil(me.reviveAt-t))+'...',VIEW.x+VIEW.w/2,VIEW.y+82,'#e0e0e0','bold 12px Tahoma, sans-serif','center');
   }
-  if(!opp){
-    const s=isHost?'Esperando rival...  Código de sala: '+roomCode:'Esperando al otro jugador...';
+  if(players.size===0){
+    const s=isHost?'Esperando jugadores...  Código de sala: '+roomCode:'Esperando a otros jugadores...';
     ctx.fillStyle='rgba(0,0,0,.55)'; ctx.fillRect(VIEW.x+VIEW.w/2-170,VIEW.y+8,340,24);
     txt(s,VIEW.x+VIEW.w/2,VIEW.y+25,'#ffd24a','bold 12px Tahoma, sans-serif','center');
   }
@@ -1208,7 +1284,7 @@ function drawPanel(t){
   const C=CLASSES[me.cls];
   txt(me.name,679,27,me.fac==='k'?'#ff4a3a':'#5aaaff','bold 15px Georgia, serif','center');
   txt(C.n+' · '+(me.fac==='k'?'Criminal':'Ciudadano'),679,42,'#c8b48a','11px Tahoma, sans-serif','center');
-  txt('Matados: '+myKills+'   Muertes: '+oppKills,679,57,'#ffd24a','bold 11px Tahoma, sans-serif','center');
+  txt('Matados: '+me.kills+'   Muertes: '+me.deaths,679,57,'#ffd24a','bold 11px Tahoma, sans-serif','center');
   for(const b of buttons()) drawButton(b);
   if(tab===0){
     for(let i=0;i<20;i++){
@@ -1249,23 +1325,27 @@ function drawPanel(t){
   if(me.dead) st.push(['Muerto','#ff5040']);
   st.forEach((s,i)=>txt(s[0],584+(i%2)*104,406,s[1],'bold 10px Tahoma, sans-serif'));
   if(!st.length) txt('Sano',584,406,'#6a5a40','10px Tahoma, sans-serif');
-  // rival
-  if(opp){
-    txt('Rival',679,440,'#c8b48a','bold 11px Tahoma, sans-serif','center');
-    txt(opp.name+' <'+CLASSES[opp.cls].n+'>',679,455,opp.fac==='k'?'#ff4a3a':'#5aaaff','bold 11px Tahoma, sans-serif','center');
-    txt(opp.dead?'Muerto':opp.invis?'Invisible':opp.para?'Paralizado':opp.inmo?'Inmovilizado':opp.med?'Meditando':'En combate',679,470,'#a89470','10px Tahoma, sans-serif','center');
-  } else txt('Sin rival todavía',679,452,'#7d6c50','11px Tahoma, sans-serif','center');
-  const help=['WASD caminar · Ctrl pegar · Espacio usar','Q/E pociones · L lanzar · M meditar','Enter hablar · Tab pestaña · F pantalla'];
-  help.forEach((h,i)=>txt(h,679,488+i*11,'#8a7a5a','9px Tahoma, sans-serif','center'));
+  // tabla de jugadores
+  const list=allChars().sort((a,b)=>b.kills-a.kills||a.deaths-b.deaths);
+  txt('Jugadores '+list.length+'/'+MAX_PLAYERS,584,439,'#c8b48a','bold 11px Tahoma, sans-serif');
+  txt('M / D',774,439,'#c8b48a','bold 10px Tahoma, sans-serif','right');
+  ctx.fillStyle='#4a3a20'; ctx.fillRect(580,443,198,1);
+  list.slice(0,6).forEach((c,i)=>{
+    const y=456+i*11.5, col=c.dead?'#8a8a8a':c.fac==='k'?'#ff5a4a':'#6ab0ff';
+    txt((c===me?'» ':'')+c.name,584,y,col,(c===me?'bold ':'')+'10px Tahoma, sans-serif');
+    txt(CLASSES[c.cls].n,700,y,'#8a7a5a','9px Tahoma, sans-serif','center');
+    txt(c.kills+' / '+c.deaths,774,y,'#e0d0a0','10px Tahoma, sans-serif','right');
+  });
+  if(list.length>6) txt('y '+(list.length-6)+' más...',679,516,'#7d6c50','9px Tahoma, sans-serif','center');
   // sala
   txt('Sala: '+roomCode,679,547,'#ffd24a','bold 13px Tahoma, sans-serif','center');
-  const nsCol=netState==='Conectado'?'#6fe36f':netState==='Desconectado'?'#ff5040':'#e0c060';
-  txt(netState+(Net.connected?' · '+ping+' ms':''),679,558,nsCol,'10px Tahoma, sans-serif','center');
+  const nsCol=netState==='Desconectado'?'#ff5040':(isHost?players.size>0:Net.connected)?'#6fe36f':'#e0c060';
+  txt(isHost?'Anfitrión · '+(players.size?players.size+' conectado'+(players.size>1?'s':''):'esperando jugadores'):netState+(Net.connected?' · '+ping+' ms':''),679,558,nsCol,'10px Tahoma, sans-serif','center');
 }
 function drawBottom(t){
   if(typing){ txt('> '+chatBuf+(Math.floor(t*2)%2?'_':''),16,561,'#fff','11px Tahoma, Verdana, sans-serif'); }
   else txt('Presioná ENTER para hablar',16,561,'#5a4a34','11px Tahoma, Verdana, sans-serif',undefined,false);
-  txt('Arena 1v1 · Mapa 1 ['+me.tx+', '+me.ty+']',16,588,'#c8b48a','11px Tahoma, sans-serif');
+  txt('Arena PvP · Mapa 1 ['+me.tx+', '+me.ty+']',16,588,'#c8b48a','11px Tahoma, sans-serif');
   txt('FPS: '+fps,550,588,'#8a7a5a','11px Tahoma, sans-serif','right');
 }
 function render(t){
@@ -1282,7 +1362,7 @@ function render(t){
 const ARROWS={ArrowDown:0,ArrowUp:1,ArrowLeft:2,ArrowRight:3,KeyS:0,KeyW:1,KeyA:2,KeyD:3};
 function canWalk(x,y){
   if(isBlocked(x,y)) return false;
-  if(opp&&!opp.dead&&!me.dead&&occupies(opp,x,y)) return false;
+  if(!me.dead&&charAtTile(x,y)) return false;
   return true;
 }
 function tryStep(over){
@@ -1305,7 +1385,7 @@ function stepChar(c,dt,local){
   } else if(local) tryStep(0);
 }
 function update(dt,t){
-  stepChar(me,dt,true); if(opp) stepChar(opp,dt,false);
+  stepChar(me,dt,true); for(const c of players.values()) stepChar(c,dt,false);
   if(me.para&&t>me.para){me.para=0;logm('Ya no estás paralizado.',COL.info);dirty()}
   if(me.inmo&&t>me.inmo){me.inmo=0;logm('Ya no estás inmovilizado.',COL.info);dirty()}
   if(me.invis&&t>me.invisUntil){me.invis=false;logm('Has vuelto a ser visible.',COL.info);dirty()}
@@ -1320,7 +1400,7 @@ function update(dt,t){
     }
   }
   if(me.dead&&t>=me.reviveAt) revive();
-  if(Net.connected&&((stDirty&&t-lastSt>.08)||t-lastSt>1)) sendState();
+  if((isHost?Net.links.size>0:Net.connected)&&((stDirty&&t-lastSt>.08)||t-lastSt>1)) sendState();
   fxs=fxs.filter(f=>t-f.t0<f.dur); floats=floats.filter(f=>t-f.t0<1.1);
 }
 let lastT=0, fpsAcc=0, fpsN=0;
@@ -1382,7 +1462,7 @@ addEventListener('keydown',e=>{
 addEventListener('keyup',e=>{ const i=held.indexOf(e.code); if(i>=0) held.splice(i,1); });
 addEventListener('blur',()=>{held=[]});
 function toLogical(e){ return [(e.clientX*dpr-offX)/sc,(e.clientY*dpr-offY)/sc]; }
-let dragList=null, dragItem=null;
+let dragList=null, dragItem=null, lastInvClick={i:-1,t:0};
 function invSlotAt(x,y){const cx=Math.floor((x-INV_X)/CELL), cy=Math.floor((y-INV_Y)/CELL); return (x>=INV_X&&cx>=0&&cx<5&&y>=INV_Y&&cy>=0&&cy<4)?cy*5+cx:-1}
 function saveInvLayout(){ try{localStorage.setItem('aoInv_'+me.cls,JSON.stringify(inv.map(i=>i?i.k:null)))}catch(e){} }
 function loadInvLayout(){
@@ -1427,15 +1507,19 @@ canvas.addEventListener('mousedown',e=>{
   const [x,y]=toLogical(e); mouse.x=x; mouse.y=y;
   if(e.button===2){targeting=false;return}
   if(x>=VIEW.x&&x<VIEW.x+VIEW.w&&y>=VIEW.y&&y<VIEW.y+VIEW.h){
-    const tx=Math.floor((x-VIEW.x+camX)/T), ty=Math.floor((y-VIEW.y+camY)/T);
-    if(targeting){castAt(tx,ty);canvas.style.cursor=targeting?'crosshair':'default';return}
-    if(tx===me.tx&&ty===me.ty) logm('Ves a '+me.name+' <'+CLASSES[me.cls].n+'>'+(me.dead?' (muerto)':''),COL.info);
-    else if(opp&&occupies(opp,tx,ty)&&(!opp.invis||opp.dead)) logm('Ves a '+opp.name+' <'+CLASSES[opp.cls].n+'>'+(opp.dead?' (muerto)':opp.para?' (paralizado)':''),COL.info);
+    const wx=x-VIEW.x+camX, wy=y-VIEW.y+camY;
+    if(targeting){castAt(wx,wy);canvas.style.cursor=targeting?'crosshair':'default';return}
+    const c=pickChar(wx,wy);
+    if(c&&(c===me||!c.invis)) logm('Ves a '+c.name+' <'+CLASSES[c.cls].n+'>'+(c.para?' (paralizado)':''),COL.info);
     return;
   }
   for(const b of buttons()) if(x>=b.x&&x<b.x+b.w&&y>=b.y&&y<b.y+b.h){b.fn();return}
   if(tab===0){
-    const i=invSlotAt(x,y); if(i>=0&&inv[i]){selSlot=i; dragItem={from:i,x0:x,y0:y,moved:false};}
+    const i=invSlotAt(x,y), t=now();
+    if(i>=0&&inv[i]){
+      if(i===lastInvClick.i&&(e.detail>=2||t-lastInvClick.t<.4)){ selSlot=i; useItem(i); lastInvClick.t=t; return; }
+      lastInvClick={i,t}; selSlot=i; dragItem={from:i,x0:x,y0:y,moved:false};
+    }
   } else if(x>=SPL_X&&x<SPL_X+202&&y>=SPL_Y&&y<SPL_Y+184){
     dragList='spell'; listPick(x,y,'spell');
   }
@@ -1449,8 +1533,7 @@ canvas.addEventListener('wheel',e=>{
 canvas.addEventListener('dblclick',e=>{
   if(!started) return;
   const [x,y]=toLogical(e);
-  if(tab===0){const i=invSlotAt(x,y); if(i>=0&&inv[i]) useItem(i)}
-  else if(x>=SPL_X&&x<SPL_X+202&&y>=SPL_Y&&y<SPL_Y+184) startTargeting();
+  if(tab===1&&x>=SPL_X&&x<SPL_X+202&&y>=SPL_Y&&y<SPL_Y+184) startTargeting();
 });
 
 // =====================================================================
@@ -1484,11 +1567,10 @@ function buildLobby(){
   $('#joinCode').addEventListener('keydown',e=>{if(e.key==='Enter')$('#btnJoin').click()});
   $('#name').addEventListener('keydown',e=>{if(e.key==='Enter')$('#btnCreate').focus()});
 }
-function startGame(){
+function startGame(sp){
   if(started) return;
-  const name=$('#name').value.trim().replace(/[<>]/g,'').slice(0,14);
-  const sp=SPAWN[isHost?0:1];
-  me=newChar({name,cls:lobbyCls,fac:lobbyFac,x:sp.x,y:sp.y}); me.dir=isHost?3:2;
+  const name=cleanName($('#name').value.trim());
+  me=newChar({id:myId,name,cls:lobbyCls,fac:lobbyFac,x:sp.x,y:sp.y});
   const C=CLASSES[me.cls];
   inv=[{k:'potR',n:'Poción Roja',d:'Restaura 30 puntos de vida. Atajo: Q. Usar seleccionado: Espacio',count:2000},
        {k:'potB',n:'Poción Azul',d:'Restaura maná (3% + 12). Atajo: E. Usar seleccionado: Espacio',count:2000}];
@@ -1500,9 +1582,8 @@ function startGame(){
   $('#lobby').style.display='none';
   try{document.activeElement&&document.activeElement.blur()}catch(e){}
   logm('Bienvenido a la Arena, '+name+'.',COL.sys);
-  if(isHost) logm('Sala creada. Pasale este código a tu amigo: '+roomCode,COL.sys);
+  if(isHost) logm('Sala creada (hasta '+MAX_PLAYERS+' jugadores, todos contra todos). Pasales este código: '+roomCode,COL.sys);
   logm('WASD para caminar, Ctrl para pegar, Espacio para usar. Elegí un hechizo y apretá LANZAR (o L).',COL.info);
-  if(!netState) netState=isHost?'Esperando rival':'Conectado';
   lastT=now(); requestAnimationFrame(loop);
 }
 
