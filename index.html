@@ -23,6 +23,11 @@ input[type=text]:focus{border-color:#e9c46a}
 .cls{background:#120d08;border:1px solid #4a3a20;padding:6px 2px 4px;text-align:center;cursor:pointer;font-size:11px;color:#c8b48a;user-select:none}
 .cls canvas{width:48px;height:72px;image-rendering:pixelated;display:block;margin:0 auto 2px}
 .cls.sel{border-color:#e9c46a;background:#2a1f10;color:#fff;box-shadow:inset 0 0 10px #8a5a00}
+.skins{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.skin{background:#120d08;border:1px solid #4a3a20;padding:4px 2px;text-align:center;cursor:pointer;font-size:10px;color:#c8b48a;user-select:none}
+.skin canvas{width:30px;height:45px;image-rendering:pixelated}
+.skin.sel{border-color:#e9c46a;background:#2a1f10;color:#fff;box-shadow:inset 0 0 10px #8a5a00}
+.noskin{grid-column:1/-1;font-size:11px;color:#7d6c50;padding:6px 0}
 .desc{font-size:11px;color:#a8946e;min-height:30px;margin-top:6px;line-height:1.4}
 .fac{display:flex;gap:6px}.fac button{flex:1}
 .bots{display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:6px}
@@ -50,6 +55,8 @@ button:disabled{opacity:.5;cursor:default}
  <label>Clase</label>
  <div class="classes" id="classes"></div>
  <div class="desc" id="clsDesc"></div>
+ <label>Aspecto</label>
+ <div class="skins" id="skins"></div>
  <label>Facción</label>
  <div class="fac"><button id="facC" class="on" style="color:#7ab8ff">Ciudadano</button><button id="facK" style="color:#ff6b5b">Criminal</button></div>
  <label>Bots al crear sala (los equipos son humanos contra bots)</label>
@@ -351,48 +358,167 @@ const PAL={
   guerrero:{body:'#7b8089',bodyD:'#4c5058',bodyL:'#a8adb5',cape:'#8e1e1e',capeD:'#5a1010',horn:'#e6d9b8',wood:'#7a4c24',woodD:'#4e3018',hair:'#3a2212',pants:'#4a3626',boots:'#2e2014',belt:'#3a2616'},
   asesino: {body:'#3e2e24',bodyD:'#241a14',bodyL:'#5e4636',hood:'#1e1e26',hoodL:'#363642',sash:'#a01c1c',pants:'#2a221c',boots:'#1a1410',hair:'#111',belt:'#a01c1c'},
 };
+// aspectos: mismos colores de la clase, distinto diseño (cabeza, cuerpo, arma, escudo)
+const SKINS={
+  mago:[
+    {n:'Archimago'},
+    {n:'Encapuchado',head:'hood',robe:'tattered',weapon:'orb'},
+    {n:'Erudito',head:'longhair',robe:'tunic',weapon:'wand',off:'book'},
+    {n:'Hechicero de Batalla',head:'circlet',robe:'battle',weapon:'scythe'},
+  ],
+  asesino:[
+    {n:'Sombra'},
+    {n:'Enmascarado',head:'mask',body:'vest',weapon:'curved'},
+    {n:'Silencioso',head:'wrap',body:'wrapped',weapon:'reverse'},
+    {n:'Ladrón',head:'hat',body:'coat',weapon:'dagger',single:true},
+  ],
+  guerrero:[
+    {n:'Hierro'},
+    {n:'Gladiador',head:'crest',body:'gladiator',shield:'buckler',weapon:'sword',nocape:true},
+    {n:'Caballero Pesado',head:'greathelm',body:'heavy',shield:'kite'},
+    {n:'Bárbaro',head:'wild',body:'fur',weapon:'axe',shield:'none',nocape:true},
+  ],
+};
+const skinCount=cls=>SKINS[cls]?SKINS[cls].length:1;
+const fixSkin=(cls,k)=>{k=k|0;return k>=0&&k<skinCount(cls)?k:0};
 const WEAPON={mago:'staff',clerigo:'mace',paladin:'sword',guerrero:'bigsword',asesino:'dagger'};
 const SPR=new Map();
-function makeChar(cls,dir,frame,atk){
-  const key=cls+'|'+dir+'|'+frame+'|'+(atk?1:0);
+function makeChar(cls,dir,frame,atk,skin){
+  skin=fixSkin(cls,skin);
+  const key=cls+'|'+dir+'|'+frame+'|'+(atk?1:0)+'|'+skin;
   let s=SPR.get(key); if(s) return s;
-  const d=dir===3?2:dir, P=PAL[cls], robe=cls==='mago';
+  const S=(SKINS[cls]&&SKINS[cls][skin])||{}, P=PAL[cls];
+  const d=dir===3?2:dir;
+  const robeStyle=cls==='mago'?(S.robe||'robe'):null;
+  const fullRobe=robeStyle==='robe'||robeStyle==='tattered'||robeStyle==='battle';
   const c=cv(40,60), g=c.getContext('2d');
   const R=(x,y,w,h,col)=>{g.fillStyle=col;g.fillRect(x,y,w,h)};
   const SH='rgba(0,0,0,.28)', HI='rgba(255,255,255,.18)';
+  const STEEL='#9ca2aa', STEELD='#666c74', STEELL='#d4d8de', LEATHER='#6a4428', LEATHERD='#462c16', FUR='#8a7a62', FURD='#5e5240', FURL='#b4a48a', CLOTH='#d8d0bc', WILD='#5a3418';
   const sA=frame===1, sB=frame===3;
   const la=sA?1:sB?-1:0;              // balanceo de brazos
   const sw=sA?-2:sB?2:0;              // brazo lateral
+  const isG=cls==='guerrero', isA=cls==='asesino', isM=cls==='mago';
+  const bareArms=(isA&&S.body==='vest')||(isG&&(S.body==='gladiator'||S.body==='fur'));
 
   function legs(){
-    if(robe){
+    if(fullRobe){
       if(d!==2){R(15,sA?54:55,4,2,P.boots);R(21,sB?54:55,4,2,P.boots)}
       else{R(sA?14:sB?22:17,55,6,2,P.boots)}
       return;
     }
-    const pc=P.pants;
+    let pc=P.pants||P.bodyD, bc=P.boots, greave=null, wraps=false;
+    if(isM) pc=P.bodyD;
+    if(isG&&S.body==='gladiator'){ pc=SKIN; greave=STEEL; bc=LEATHERD; }
+    if(isG&&S.body==='fur'){ pc=LEATHERD; bc=FURD; }
+    if(isA&&S.body==='wrapped'){ pc=P.hood; wraps=true; }
     if(d!==2){
       const lh=sA?11:13, rh=sB?11:13;
       R(15,42,4,lh,pc); R(21,42,4,rh,pc); R(23,42,2,rh,SH);
-      R(14,42+lh-3,5,4,P.boots); R(21,42+rh-3,5,4,P.boots);
+      if(wraps) for(let y=45;y<53;y+=3){R(15,y,4,1,'#44444f');R(21,y,4,1,'#44444f')}
+      if(greave){R(15,42+lh-9,4,6,greave);R(21,42+rh-9,4,6,greave);R(15,42+lh-9,1,6,STEELL)}
+      R(14,42+lh-3,5,4,bc); R(21,42+rh-3,5,4,bc);
     } else {
       let fx=18,bx=18; if(sA){fx=14;bx=22}else if(sB){fx=22;bx=14}
-      R(bx,42,4,13,pc); R(bx,42,4,13,SH); R(bx-1,52,6,4,P.boots);
-      R(fx,42,4,13,pc); R(fx-2,52,6,4,P.boots);
+      R(bx,42,4,13,pc); R(bx,42,4,13,SH); if(greave)R(bx,46,4,6,STEELD); R(bx-1,52,6,4,bc);
+      R(fx,42,4,13,pc); if(greave){R(fx,46,4,6,greave);R(fx,46,1,6,STEELL)} if(wraps)for(let y=45;y<53;y+=3)R(fx,y,4,1,'#44444f'); R(fx-2,52,6,4,bc);
+    }
+  }
+  function robeRows(y0,y1,base,grow){
+    for(let y=y0;y<=y1;y++){
+      const hw=base+Math.floor((y-y0)/grow), x0=20-hw;
+      R(x0,y,hw*2,1,P.body); R(x0,y,2,1,P.bodyL); R(x0+hw*2-2,y,2,1,P.bodyD);
+      if(robeStyle==='tattered'&&y>=50) for(let x=x0;x<x0+hw*2;x++) if(((x*7+y*3)%5)<(y-49)) g.clearRect(x,y,1,1);
     }
   }
   function torso(){
-    if(robe){
-      for(let y=26;y<=55;y++){
-        const hw=(d===2?5:7)+Math.floor((y-26)/7);
-        const x0=20-hw;
-        R(x0,y,hw*2,1,P.body); R(x0,y,2,1,P.bodyL); R(x0+hw*2-2,y,2,1,P.bodyD);
+    if(isM){
+      if(fullRobe){
+        robeRows(26,55,d===2?5:7,7);
+        if(robeStyle==='robe'){
+          if(d===0)R(19,27,2,27,P.trim);
+          for(let y=53;y<=54;y++){const hw=(d===2?5:7)+Math.floor((y-26)/7);R(20-hw,y,hw*2,1,P.trim)}
+          R(13,40,14,1,P.trim);
+        }
+        if(robeStyle==='tattered'){
+          if(d===0){R(18,30,4,22,P.bodyD);R(19,30,2,22,'#140e2a')}
+          R(d===2?15:13,40,d===2?10:14,1,'#8a6a3a'); if(d===0){R(19,41,2,5,'#8a6a3a');R(18,45,1,2,'#8a6a3a');R(21,45,1,2,'#8a6a3a')}
+          if(d!==2){for(let x=11;x<29;x++)R(x,25,1,5+((x*3)%3),P.bodyD)} else for(let x=14;x<26;x++)R(x,25,1,5+((x*3)%3),P.bodyD);
+        }
+        if(robeStyle==='battle'){
+          for(let y=53;y<=54;y++){const hw=(d===2?5:7)+Math.floor((y-26)/7);R(20-hw,y,hw*2,1,P.trim)}
+          if(d===0){R(15,27,10,9,STEEL);R(15,27,10,1,STEELL);R(15,35,10,1,STEELD);R(19,29,2,4,P.trim);R(18,30,4,2,P.trim)}
+          if(d===2){R(16,27,6,9,STEEL);R(16,27,6,1,STEELL)}
+          R(d===2?15:13,38,d===2?10:14,3,P.trim); if(d!==1)R(d===2?16:19,38,2,3,'#fff1b0');
+          if(d!==2){R(8,24,7,6,STEEL);R(8,24,7,2,STEELL);R(25,24,7,6,STEEL);R(25,24,7,2,STEELL);R(30,25,2,5,STEELD)}
+          else{R(17,23,8,6,STEEL);R(17,23,8,2,STEELL)}
+        }
+      } else { // túnica corta del erudito
+        for(let y=26;y<=46;y++){const hw=(d===2?5:7)+(y>38?1:0), x0=20-hw; R(x0,y,hw*2,1,P.body);R(x0,y,2,1,P.bodyL);R(x0+hw*2-2,y,2,1,P.bodyD)}
+        const hw=d===2?6:8; R(20-hw,45,hw*2,2,P.trim);
+        R(d===2?15:13,38,d===2?10:14,2,P.trim);
+        if(d===0){R(19,26,2,12,P.trim);R(23,40,3,4,LEATHER);R(23,40,3,1,'#8a6040')}
       }
-      if(d===0){R(19,27,2,27,P.trim)}
-      for(let y=53;y<=54;y++){const hw=(d===2?5:7)+Math.floor((y-26)/7);R(20-hw,y,hw*2,1,P.trim)}
-      R(13,40,14,1,P.trim);
       return;
     }
+    if(isA&&S.body==='vest'){
+      if(d!==2){R(14,26,12,15,P.body);R(14,26,2,15,P.bodyL);R(24,26,2,15,P.bodyD)} else {R(16,26,8,15,P.body);R(16,26,2,15,P.bodyL)}
+      if(d===0){R(18,26,4,5,SKIN);R(19,31,2,1,P.bodyD);for(let y=28;y<37;y+=3)R(18,y,4,1,LEATHERD)}
+      R(d===2?15:13,40,d===2?10:14,2,LEATHERD);
+      if(d===0){R(13,42,4,3,LEATHER);R(23,42,4,3,LEATHER)} else if(d===2) R(22,42,3,3,LEATHER);
+      return;
+    }
+    if(isA&&S.body==='wrapped'){
+      if(d!==2){R(13,26,14,16,P.hood);R(13,26,3,16,P.hoodL);R(24,26,3,16,'#101016');R(13,40,14,1,P.sash)}
+      else{R(15,26,10,16,P.hood);R(15,26,2,16,P.hoodL);R(15,40,10,1,P.sash)}
+      for(let y=29;y<39;y+=3) R(d===2?15:13,y,d===2?10:14,1,'#2a2a34');
+      if(d===0){R(14,24,12,3,P.sash);R(23,27,3,11,P.sash);R(23,37,2,2,P.sash)}
+      else if(d===1){R(14,24,12,3,P.sash);R(16,27,3,13,P.sash);R(21,27,3,10,P.sash)}
+      else{R(16,24,9,3,P.sash);R(24,25,5,3,P.sash);R(28,27,3,3,P.sash);R(30,29,2,2,P.sash)}
+      return;
+    }
+    if(isA&&S.body==='coat'){
+      for(let y=26;y<=51;y++){const hw=(d===2?5:7)+(y>40?1:0), x0=20-hw; R(x0,y,hw*2,1,P.body);R(x0,y,2,1,P.bodyL);R(x0+hw*2-2,y,2,1,P.bodyD)}
+      if(d===0){R(19,26,2,14,CLOTH);R(16,26,3,10,P.bodyL);R(21,26,3,10,P.bodyL);R(19,40,2,12,'#1a120c')}
+      if(d===1)R(19,42,2,10,P.bodyD);
+      R(d===2?15:13,38,d===2?10:14,2,LEATHERD); if(d!==1)R(d===2?16:19,38,2,2,'#d6a93a');
+      if(d===2){R(24,40,3,12,P.bodyD)}
+      return;
+    }
+    if(isG&&S.body==='gladiator'){
+      if(d!==2){R(13,26,14,14,SKIN);R(24,26,3,14,SKIND);R(15,31,10,1,SKIND)}else{R(15,26,10,14,SKIN);R(23,26,2,14,SKIND)}
+      if(d===0)for(let i=0;i<14;i++)R(13+i,26+i,2,1,LEATHER);
+      if(d===1)for(let i=0;i<14;i++)R(26-i,26+i,2,1,LEATHER);
+      if(d===2)for(let i=0;i<9;i++)R(16+i,27+i,2,1,LEATHER);
+      R(d===2?15:13,39,d===2?10:14,2,LEATHERD);
+      for(let x=(d===2?15:13);x<(d===2?25:27);x+=2) R(x,41,2,7,((x>>1)&1)?LEATHER:P.cape);
+      if(d===0){R(8,24,7,6,P.body);R(8,24,7,2,P.bodyL);R(8,27,7,1,P.bodyD)}
+      else if(d===1){R(25,24,7,6,P.body);R(25,24,7,2,P.bodyL)}
+      else{R(17,23,8,6,P.body);R(17,23,8,2,P.bodyL);R(17,26,8,1,P.bodyD)}
+      return;
+    }
+    if(isG&&S.body==='fur'){
+      if(d!==2){R(13,26,14,14,SKIN);R(24,26,3,14,SKIND);R(15,32,4,1,SKIND);R(21,32,4,1,SKIND)}else{R(15,26,10,14,SKIN);R(23,26,2,14,SKIND)}
+      R(d===2?15:13,38,d===2?10:14,3,LEATHER); if(d!==1){R(d===2?16:18,38,4,3,STEEL);R(d===2?17:19,39,2,1,STEELD)}
+      const x0=d===2?15:13, w=d===2?10:14;
+      R(x0,41,w,6,FUR); for(let x=x0;x<x0+w;x++){ if((x*5)%3===0)R(x,47,1,1,FUR); if((x*7)%4===0)R(x,43,1,1,FURD) }
+      if(d!==2){R(9,23,22,7,FUR);for(let x=9;x<31;x++){if((x*5)%3===0)R(x,30,1,1,FUR);if((x*3)%4===0)R(x,24,1,2,FURL);if((x*7)%5===0)R(x,27,1,1,FURD)}}
+      else{R(14,23,12,7,FUR);for(let x=14;x<26;x++){if((x*3)%4===0)R(x,24,1,2,FURL);if((x*5)%3===0)R(x,30,1,1,FUR)}}
+      return;
+    }
+    if(isG&&S.body==='heavy'){
+      if(d!==2){R(13,26,14,16,P.body);R(13,26,3,16,P.bodyL);R(24,26,3,16,P.bodyD)}else{R(15,26,10,16,P.body);R(15,26,2,16,P.bodyL);R(23,26,2,16,P.bodyD)}
+      const mx=d===2?15:13, mw=d===2?10:14;
+      R(mx,40,mw,7,STEELD); for(let y=41;y<47;y+=2)for(let x=mx;x<mx+mw;x+=2)R(x+((y>>1)&1),y,1,1,STEEL);
+      if(d===0){R(15,27,10,20,P.cape);R(15,27,1,20,STEEL);R(24,27,1,20,STEEL);R(19,30,2,8,STEELL);R(17,32,6,2,STEELL)}
+      if(d===1){R(15,27,10,20,P.cape);R(15,27,1,20,STEEL);R(24,27,1,20,STEEL)}
+      if(d===2){R(16,27,6,20,P.cape);R(16,27,1,20,STEEL)}
+      R(mx,39,mw,1,LEATHERD);
+      if(d!==2){R(7,23,9,7,P.body);R(7,23,9,2,P.bodyL);R(7,29,9,1,P.bodyD);R(24,23,9,7,P.body);R(24,23,9,2,P.bodyL);R(31,24,2,5,P.bodyD)}
+      else{R(16,22,10,7,P.body);R(16,22,10,2,P.bodyL)}
+      return;
+    }
+    // ---- cuerpos originales ----
     if(d!==2){R(13,26,14,16,P.body);R(13,26,3,16,P.bodyL);R(24,26,3,16,P.bodyD);R(13,40,14,2,P.belt||P.bodyD)}
     else{R(15,26,10,16,P.body);R(15,26,2,16,P.bodyL);R(23,26,2,16,P.bodyD);R(15,40,10,2,P.belt||P.bodyD)}
     if(cls==='clerigo'){
@@ -407,56 +533,97 @@ function makeChar(cls,dir,frame,atk){
       if(d!==2){R(9,25,6,5,P.body);R(9,25,6,2,P.bodyL);R(25,25,6,5,P.body);R(25,25,6,2,P.bodyL);R(29,26,2,4,P.bodyD)}
       else{R(17,24,7,5,P.body);R(17,24,7,2,P.bodyL)}
     }
-    if(cls==='guerrero'){
+    if(isG){
       if(d!==2){R(10,25,5,4,P.bodyL);R(25,25,5,4,P.body);R(28,25,2,4,P.bodyD)}
       if(d===0){R(15,29,10,1,P.bodyD);R(15,33,10,1,P.bodyD)}
     }
-    if(cls==='asesino'){
+    if(isA){
       if(d===0)for(let i=0;i<13;i++)R(14+i,27+i,2,1,P.sash);
       if(d===2)for(let i=0;i<8;i++)R(16+i,28+i,2,1,P.sash);
     }
   }
-  function capeBack(){ // capa/manto detrás
-    if(cls==='guerrero'){
+  function capeBack(){ // capa/manto detrás del cuerpo
+    if(isG&&!S.nocape){
       if(d===0){R(11,27,2,22,P.capeD);R(27,27,2,22,P.capeD)}
       if(d===2){R(22,26,6,25,P.cape);R(26,26,2,25,P.capeD)}
     }
-    if(cls==='asesino'){
+    if(isG&&S.body==='fur'&&d===2){R(21,24,6,13,FUR);R(21,24,1,13,FURL)}
+    if(isA&&!S.body){
       if(d===0){R(11,27,2,24,P.hood);R(27,27,2,24,P.hood)}
       if(d===2){R(22,25,6,27,P.hood);R(22,25,1,27,P.hoodL)}
     }
+    if(isM&&robeStyle==='tunic'){
+      if(d===0){R(11,26,2,13,P.bodyD);R(27,26,2,13,P.bodyD)}
+      if(d===2){R(22,25,5,15,P.bodyD)}
+    }
+    if(isM&&S.head==='circlet'){            // cuello alto
+      if(d===0){R(12,16,3,10,P.bodyD);R(25,16,3,10,P.bodyD);R(11,15,2,2,P.trim);R(27,15,2,2,P.trim)}
+      if(d===2){R(22,16,5,10,P.bodyD);R(26,15,2,2,P.trim)}
+    }
   }
-  function capeFront(){ // capa vista de espaldas
+  function capeFront(){ // vista de espaldas: lo que cubre la espalda
     if(d!==1) return;
-    if(cls==='guerrero'){R(12,26,16,26,P.cape);R(12,26,3,26,'#a8302a');for(let x=16;x<28;x+=4)R(x,30,1,22,P.capeD);R(12,51,16,1,P.capeD)}
-    if(cls==='asesino'){R(12,25,16,28,P.hood);R(12,25,3,28,P.hoodL);for(let x=17;x<28;x+=5)R(x,30,1,22,'#101016')}
+    if(isG&&!S.nocape){R(12,26,16,26,P.cape);R(12,26,3,26,'#a8302a');for(let x=16;x<28;x+=4)R(x,30,1,22,P.capeD);R(12,51,16,1,P.capeD)}
+    if(isG&&S.body==='fur'){R(10,23,20,16,FUR);for(let x=10;x<30;x++){if((x*5)%3===0)R(x,39,1,2,FUR);if((x*3)%4===0)R(x,25,1,3,FURL);if((x*7)%5===0)R(x,31,1,2,FURD)}}
+    if(isA&&!S.body){R(12,25,16,28,P.hood);R(12,25,3,28,P.hoodL);for(let x=17;x<28;x+=5)R(x,30,1,22,'#101016')}
+    if(isM&&robeStyle==='tunic'){R(12,25,16,16,P.bodyD);R(12,25,16,1,P.trim)}
   }
   function arms(){
-    const ac=P.body;
+    const ac=bareArms?SKIN:(isA&&S.body==='wrapped')?P.hood:P.body;
+    const brace=isA&&S.body==='vest'?CLOTH:isG&&S.body==='fur'?LEATHER:null;
+    const manica=isG&&S.body==='gladiator';
     if(d!==2){
       R(10,27+la,3,12,ac);R(10,27+la,1,12,HI);R(10,39+la,3,3,SKIN);
       R(27,27-la,3,12,ac);R(29,27-la,1,12,SH);R(27,39-la,3,3,SKIN);
-    } else {R(19+sw,27,3,12,ac);R(19+sw,27,1,12,HI);R(19+sw,39,3,3,SKIN)}
+      if(brace){R(10,34+la,3,4,brace);R(27,34-la,3,4,brace)}
+      if(manica){const mx=d===0?10:27, my=27+(d===0?la:-la); for(let y=my;y<my+11;y+=2){R(mx,y,3,1,STEEL);R(mx,y+1,3,1,STEELD)}}
+    } else {
+      R(19+sw,27,3,12,ac);R(19+sw,27,1,12,HI);R(19+sw,39,3,3,SKIN);
+      if(brace)R(19+sw,34,3,4,brace);
+      if(manica)for(let y=27;y<38;y+=2){R(19+sw,y,3,1,STEEL);R(19+sw,y+1,3,1,STEELD)}
+    }
   }
   function head(){
+    const hair=(isG&&S.head==='wild')?WILD:(isM&&S.head==='longhair')?'#dcdcdc':P.hair;
     if(d===0){
       R(18,24,4,2,SKIND); R(15,14,10,11,SKIN); R(24,14,1,11,SKIND);
       R(17,19,2,2,EYE); R(21,19,2,2,EYE); R(19,23,2,1,SKIND);
-      R(14,12,12,4,P.hair); R(14,15,2,6,P.hair); R(24,15,2,6,P.hair);
+      R(14,12,12,4,hair); R(14,15,2,6,hair); R(24,15,2,6,hair);
     } else if(d===1){
-      R(18,24,4,2,SKIND); R(15,14,10,11,P.hair); R(14,12,12,12,P.hair); R(23,13,2,10,'rgba(0,0,0,.2)');
+      R(18,24,4,2,SKIND); R(15,14,10,11,hair); R(14,12,12,12,hair); R(23,13,2,10,'rgba(0,0,0,.2)');
     } else {
       R(19,24,3,2,SKIND); R(15,14,9,11,SKIN); R(14,19,1,2,SKIN); R(16,19,2,2,EYE); R(16,23,2,1,SKIND);
-      R(15,12,10,4,P.hair); R(20,15,5,8,P.hair);
+      R(15,12,10,4,hair); R(20,15,5,8,hair);
     }
   }
+  function hood(col,colL,face,eye){
+    if(d===0){R(13,11,14,14,col);R(13,11,3,14,colL);R(16,16,8,8,face);R(17,19,2,1,eye);R(21,19,2,1,eye);R(12,22,16,5,col);R(14,24,12,1,colL)}
+    else if(d===1){R(13,11,14,16,col);R(13,11,3,16,colL);R(12,22,16,5,col)}
+    else{R(14,11,12,14,col);R(15,11,2,14,colL);R(14,16,4,7,face);R(15,19,2,1,eye);R(13,22,14,5,col);R(25,14,3,8,col)}
+  }
   function headgear(){
-    if(cls==='mago'){
-      if(d===0){R(16,21,8,6,'#e4e4e4');R(17,27,6,2,'#e4e4e4');R(18,29,4,1,'#e4e4e4');R(19,22,2,1,'#bbb')}
-      if(d===2){R(14,21,5,6,'#e4e4e4');R(15,27,3,2,'#e4e4e4')}
-      R(11,12,18,3,P.bodyD); R(11,12,18,1,P.body);
-      for(let i=0;i<11;i++){const w=Math.max(2,Math.round(12-i*1.1)); const tilt=d===2?Math.floor(i*.55):Math.floor(i*.3); R(Math.round(20-w/2)+tilt,11-i,w,1,i<2?P.trim:P.body)}
-      R(15,11,2,1,P.bodyL);
+    if(isM){
+      const h=S.head||'hat';
+      if(h==='hat'){
+        if(d===0){R(16,21,8,6,'#e4e4e4');R(17,27,6,2,'#e4e4e4');R(18,29,4,1,'#e4e4e4');R(19,22,2,1,'#bbb')}
+        if(d===2){R(14,21,5,6,'#e4e4e4');R(15,27,3,2,'#e4e4e4')}
+        R(11,12,18,3,P.bodyD); R(11,12,18,1,P.body);
+        for(let i=0;i<11;i++){const w=Math.max(2,Math.round(12-i*1.1)); const tilt=d===2?Math.floor(i*.55):Math.floor(i*.3); R(Math.round(20-w/2)+tilt,11-i,w,1,i<2?P.trim:P.body)}
+        R(15,11,2,1,P.bodyL);
+      }
+      if(h==='hood'){ hood(P.body,P.bodyL,'#0c0a16','#7fd8ff'); R(19,8,2,3,P.body); R(d===2?22:20,7,3,2,P.bodyD); R(d===2?24:22,8,2,2,P.bodyD); }
+      if(h==='longhair'){
+        const H='#dcdcdc';
+        if(d===0){R(13,15,3,14,H);R(24,15,3,14,H);R(17,22,6,4,'#e8e8e8');R(18,26,4,1,'#e8e8e8');R(19,23,2,1,'#bbb')}
+        if(d===1){R(13,12,14,17,H);R(15,27,10,2,H)}
+        if(d===2){R(20,14,7,15,H);R(14,22,4,4,'#e8e8e8')}
+      }
+      if(h==='circlet'){
+        if(d===0){R(14,15,12,1,P.trim);R(19,14,2,2,'#3ab0ff');R(14,15,1,2,P.trim);R(25,15,1,2,P.trim)}
+        if(d===1){R(14,15,12,1,P.trim)}
+        if(d===2){R(15,15,10,1,P.trim);R(15,14,2,2,'#3ab0ff')}
+        if(d===1){R(12,19,16,8,P.bodyD);R(12,19,16,1,P.trim)}
+      }
     }
     if(cls==='paladin'){
       if(d===0){R(14,12,12,13,P.body);R(14,12,3,13,P.bodyL);R(23,12,3,13,P.bodyD);R(16,18,8,2,'#111');R(19,21,2,1,'#333');R(19,13,2,5,P.trim)}
@@ -464,32 +631,110 @@ function makeChar(cls,dir,frame,atk){
       else{R(14,12,11,13,P.body);R(14,12,3,13,P.bodyL);R(14,18,5,2,'#111');R(23,12,2,13,P.bodyD)}
       R(19,6,2,7,P.plume); R(d===2?20:18,7,4,3,P.plume); R(d===2?22:19,9,3,3,'#901818');
     }
-    if(cls==='guerrero'){
-      if(d===0){R(14,11,12,7,P.body);R(14,11,3,7,P.bodyL);R(23,11,3,7,P.bodyD);R(19,17,2,4,P.body);R(14,17,12,1,P.bodyD)}
-      else if(d===1){R(14,11,12,8,P.body);R(14,11,3,8,P.bodyL);R(23,11,3,8,P.bodyD)}
-      else{R(14,11,11,7,P.body);R(14,11,3,7,P.bodyL);R(14,17,3,4,P.body)}
-      if(d!==2){R(11,11,3,2,P.horn);R(10,8,2,3,P.horn);R(10,6,1,2,P.horn);R(26,11,3,2,P.horn);R(28,8,2,3,P.horn);R(29,6,1,2,P.horn)}
-      else{R(23,11,3,2,P.horn);R(25,8,2,3,P.horn);R(26,6,1,2,P.horn);R(12,10,2,2,P.horn);R(11,8,1,2,P.horn)}
+    if(isG){
+      const h=S.head||'horned';
+      if(h==='horned'){
+        if(d===0){R(14,11,12,7,P.body);R(14,11,3,7,P.bodyL);R(23,11,3,7,P.bodyD);R(19,17,2,4,P.body);R(14,17,12,1,P.bodyD)}
+        else if(d===1){R(14,11,12,8,P.body);R(14,11,3,8,P.bodyL);R(23,11,3,8,P.bodyD)}
+        else{R(14,11,11,7,P.body);R(14,11,3,7,P.bodyL);R(14,17,3,4,P.body)}
+        if(d!==2){R(11,11,3,2,P.horn);R(10,8,2,3,P.horn);R(10,6,1,2,P.horn);R(26,11,3,2,P.horn);R(28,8,2,3,P.horn);R(29,6,1,2,P.horn)}
+        else{R(23,11,3,2,P.horn);R(25,8,2,3,P.horn);R(26,6,1,2,P.horn);R(12,10,2,2,P.horn);R(11,8,1,2,P.horn)}
+      }
+      if(h==='crest'){
+        if(d===0){R(14,11,12,7,P.body);R(14,11,3,7,P.bodyL);R(23,11,3,7,P.bodyD);R(14,17,2,7,P.body);R(24,17,2,7,P.body);R(19,4,2,9,P.cape);R(18,5,1,7,P.capeD);R(21,5,1,7,'#b83a30')}
+        else if(d===1){R(14,11,12,10,P.body);R(14,11,3,10,P.bodyL);R(23,11,3,10,P.bodyD);R(19,3,2,10,P.cape);R(18,4,1,8,P.capeD)}
+        else{R(14,11,11,7,P.body);R(14,11,3,7,P.bodyL);R(22,17,3,6,P.body);R(15,6,10,3,P.cape);R(17,4,8,2,P.cape);R(25,7,3,4,P.cape);R(15,8,10,1,P.capeD)}
+      }
+      if(h==='greathelm'){
+        if(d===0){R(13,10,14,15,P.body);R(13,10,3,15,P.bodyL);R(24,10,3,15,P.bodyD);R(13,10,14,1,P.bodyL);R(15,16,10,2,'#111');R(19,19,2,4,'#222');R(17,20,6,1,'#222');R(14,23,1,1,P.bodyD);R(25,23,1,1,P.bodyD)}
+        else if(d===1){R(13,10,14,15,P.body);R(13,10,3,15,P.bodyL);R(24,10,3,15,P.bodyD);R(19,10,2,15,P.bodyD)}
+        else{R(14,10,12,15,P.body);R(14,10,3,15,P.bodyL);R(24,10,2,15,P.bodyD);R(14,16,5,2,'#111');R(15,19,2,1,'#222');R(15,21,2,1,'#222')}
+      }
+      if(h==='wild'){
+        if(d===0){R(12,10,16,6,WILD);R(12,15,3,13,WILD);R(25,15,3,13,WILD);R(12,8,2,2,WILD);R(16,7,2,3,WILD);R(21,7,2,3,WILD);R(26,8,2,2,WILD);R(14,14,12,1,LEATHER);R(15,21,10,7,WILD);R(17,28,6,2,WILD);R(18,30,4,1,WILD);R(18,22,4,1,'#c48a6a')}
+        else if(d===1){R(12,10,16,19,WILD);R(12,8,2,2,WILD);R(17,7,2,3,WILD);R(22,7,2,3,WILD);R(14,14,12,1,LEATHER);R(15,28,10,2,WILD)}
+        else{R(14,10,12,5,WILD);R(21,13,7,15,WILD);R(15,8,2,2,WILD);R(20,7,2,3,WILD);R(25,8,2,2,WILD);R(14,14,11,1,LEATHER);R(13,22,4,5,WILD);R(14,27,2,2,WILD)}
+      }
     }
-    if(cls==='asesino'){
-      if(d===0){R(13,11,14,14,P.hood);R(13,11,3,14,P.hoodL);R(16,16,8,8,'#2a1d14');R(17,19,2,1,'#e8e0c0');R(21,19,2,1,'#e8e0c0');R(12,22,16,5,P.hood);R(14,24,12,1,P.hoodL)}
-      else if(d===1){R(13,11,14,16,P.hood);R(13,11,3,16,P.hoodL);R(12,22,16,5,P.hood)}
-      else{R(14,11,12,14,P.hood);R(15,11,2,14,P.hoodL);R(14,16,4,7,'#2a1d14');R(15,19,2,1,'#e8e0c0');R(13,22,14,5,P.hood);R(25,14,3,8,P.hood)}
+    if(isA){
+      const h=S.head||'hood';
+      if(h==='hood') hood(P.hood,P.hoodL,'#2a1d14','#e8e0c0');
+      if(h==='mask'){
+        if(d===0){R(14,10,12,5,P.hair);R(14,8,2,2,P.hair);R(18,7,2,3,P.hair);R(22,8,2,2,P.hair);R(15,20,10,5,P.sash);R(15,20,10,1,'rgba(0,0,0,.25)')}
+        else if(d===1){R(14,10,12,5,P.hair);R(15,7,2,3,P.hair);R(20,7,2,3,P.hair);R(18,19,4,2,P.sash);R(19,21,2,5,P.sash);R(17,21,1,4,P.sash)}
+        else{R(15,10,10,5,P.hair);R(16,8,2,2,P.hair);R(21,7,2,3,P.hair);R(14,20,6,5,P.sash);R(23,19,3,2,P.sash);R(25,20,2,4,P.sash);R(27,22,1,2,P.sash)}
+      }
+      if(h==='wrap'){
+        if(d===0){R(14,12,12,13,P.hood);R(14,12,3,13,P.hoodL);R(16,18,8,2,SKIN);R(17,18,2,2,EYE);R(21,18,2,2,EYE);R(14,15,12,2,P.sash);R(26,15,2,2,P.sash);R(27,17,2,4,P.sash);R(28,21,1,2,P.sash)}
+        else if(d===1){R(14,12,12,13,P.hood);R(14,12,3,13,P.hoodL);R(14,15,12,2,P.sash);R(17,17,2,9,P.sash);R(21,17,2,7,P.sash)}
+        else{R(14,12,11,13,P.hood);R(15,12,2,13,P.hoodL);R(14,18,4,2,SKIN);R(15,18,1,2,EYE);R(14,15,11,2,P.sash);R(25,14,4,2,P.sash);R(28,13,3,2,P.sash);R(26,16,4,2,P.sash);R(29,17,2,2,P.sash)}
+      }
+      if(h==='hat'){
+        if(d===0){R(17,22,6,1,P.hair);R(16,23,2,1,P.hair);R(22,23,2,1,P.hair)}
+        if(d===2){R(14,22,3,1,P.hair)}
+        const bx=d===2?10:9, bw=d===2?20:22;
+        R(bx,13,bw,2,P.hood); R(bx,13,bw,1,P.hoodL); if(d!==1)R(bx+3,15,bw-6,1,'rgba(0,0,0,.35)');
+        R(d===2?15:14,7,d===2?10:12,6,P.hood); R(d===2?15:14,7,2,6,P.hoodL); R(d===2?15:14,11,d===2?10:12,2,P.sash);
+        if(d===2){R(24,4,2,7,P.sash);R(26,3,2,4,P.sash);R(27,2,2,2,'#e05050')}
+        else{R(24,3,2,8,P.sash);R(26,2,2,4,P.sash);R(27,1,2,2,'#e05050')}
+      }
     }
   }
   function drawWeapon(hx,hy,ori,type){
     const v=ori==='up'?[0,-1]:ori==='down'?[0,1]:[-1,0];
     const perp=v[0]?[0,1]:[1,0];
-    const at=(i,j,col,w=1)=>R(hx+v[0]*i+perp[0]*j,hy+v[1]*i+perp[1]*j,v[0]?1:w,v[1]?1:w,col);
+    const at=(i,j,col)=>R(hx+v[0]*i+perp[0]*j,hy+v[1]*i+perp[1]*j,1,1,col);
     if(type==='staff'){
-      for(let i=-10;i<=24;i++){at(i,0,'#6e4a28');at(i,1,'#4a3018')}
+      for(let i=-10;i<=24;i++){at(i,0,'#6e4a28');at(i,1,'#3a2410')}
       for(let j=-2;j<=3;j++)at(25,j,'#d9b24a'); at(26,-2,'#d9b24a');at(26,3,'#d9b24a');
       for(let i=26;i<=29;i++)for(let j=-1;j<=2;j++)at(i,j,'#3ab0ff'); at(28,0,'#d8f4ff');
       return;
     }
-    const L={mace:9,sword:20,bigsword:26,dagger:8}[type];
+    if(type==='scythe'){
+      for(let i=-10;i<=26;i++){at(i,0,'#3a2a20');at(i,1,'#24180f')}
+      for(let j=-1;j<=2;j++)at(26,j,'#d9b24a');
+      const bs=ori==='fwd'||d===1?1:-1, b0=bs>0?2:-1;
+      for(let k=0;k<10;k++){const i=27-Math.floor(k*k/9); at(i,b0+bs*k,'#e6ecf2'); at(i-1,b0+bs*k,'#9aa4ae'); if(k<7)at(i+1,b0+bs*k,'#e6ecf2')}
+      at(28,0,'#3ab0ff');at(28,1,'#3ab0ff');
+      return;
+    }
+    if(type==='orb'){
+      const ox=hx+v[0]*(atk?9:5), oy=hy+v[1]*(atk?9:5)-(ori==='up'?2:0);
+      g.fillStyle='#2a6aaa'; g.beginPath(); g.arc(ox,oy,3.6,0,7); g.fill();
+      g.fillStyle='#7fd8ff'; g.beginPath(); g.arc(ox-.5,oy-.5,2.6,0,7); g.fill();
+      R(ox-2,oy-2,2,2,'#e8faff'); R(ox+3,oy+3,1,1,'#7fd8ff'); R(ox-4,oy+2,1,1,'#7fd8ff'); R(ox+1,oy-5,1,1,'#b8ecff');
+      return;
+    }
+    if(type==='wand'){
+      for(let i=-1;i<=9;i++)at(i,0,'#5a3a1e'); at(10,0,'#d9b24a'); at(11,0,'#fff3b0');
+      if(atk){at(13,-1,'#fff3b0');at(13,1,'#fff3b0');at(14,0,'#ffffff')}
+      return;
+    }
+    if(type==='book'){
+      R(hx-3,hy-4,6,7,'#5a1e14'); R(hx-3,hy-4,6,1,'#8a3a24'); R(hx+2,hy-3,1,6,'#e8e0c8'); R(hx-2,hy-1,3,1,'#d9b24a'); R(hx-1,hy-3,1,5,'#d9b24a');
+      return;
+    }
+    if(type==='axe'){
+      for(let i=-6;i<=31;i++){at(i,0,'#6e4a28');at(i,1,'#4a3018')}
+      for(let i=23;i<=31;i++){const w=4-Math.abs(i-27)*.6; for(let j=1;j<=Math.round(w)+1;j++){at(i,-j,j===Math.round(w)+1?'#eef2f6':'#a8b0ba'); at(i,1+j,j===Math.round(w)+1?'#eef2f6':'#a8b0ba')}}
+      at(32,0,'#888');at(32,1,'#888');
+      return;
+    }
+    const L={mace:9,sword:20,bigsword:26,dagger:8,curved:10,reverse:8}[type];
+    if(type==='reverse'){ // daga en agarre invertido: la hoja va hacia el otro lado
+      const vv=[-v[0],-v[1]], pp=vv[0]?[0,1]:[1,0], at2=(i,j,col)=>R(hx+vv[0]*i+pp[0]*j,hy+vv[1]*i+pp[1]*j,1,1,col);
+      for(let i=-2;i<=1;i++){at(i,0,'#3a2a20');at(i,1,'#24180f')}
+      for(let j=-1;j<=2;j++)at2(2,j,'#8a8a8a');
+      for(let i=3;i<=L;i++){at2(i,0,'#f2f6fa');at2(i,1,'#a8b2bc')}
+      return;
+    }
     for(let i=-2;i<=1;i++){at(i,0,'#5a3a1e');at(i,1,'#3e2814')}
     if(type==='mace'){for(let i=2;i<=L;i++){at(i,0,'#6e4a28');at(i,1,'#4a3018')} for(let i=L;i<=L+5;i++)for(let j=-2;j<=3;j++)at(i,j,(j<0||i===L)?'#9a9a9a':'#5a5a5a'); at(L+6,0,'#bbb');at(L+2,-3,'#bbb');at(L+2,4,'#bbb');return}
+    if(type==='curved'){
+      for(let j=-1;j<=2;j++)at(2,j,'#d6a93a');
+      for(let i=3;i<=L;i++){const o=Math.floor((i-3)*(i-3)/14); at(i,o,'#f2f6fa'); at(i,o+1,'#a8b2bc')}
+      return;
+    }
     const gw=type==='dagger'?2:3;
     for(let j=-gw;j<=gw+1;j++)at(2,j,'#d6a93a');
     const bw=type==='bigsword'?3:2;
@@ -497,13 +742,22 @@ function makeChar(cls,dir,frame,atk){
     at(L+1,0,'#e0e6ec');
   }
   function shield(){
-    if(cls==='paladin'){
-      if(d===0){for(let y=28;y<=45;y++){const w=y<38?9:Math.max(1,9-Math.round((y-38)*1.3));const x0=29-w/2|0;R(x0,y,w,1,P.shield);R(x0,y,1,1,P.trim);R(x0+w-1,y,1,1,P.trim)}R(25,28,9,1,P.trim);R(28,30,2,10,P.trim);R(26,33,6,2,P.trim);R(26,29,2,7,P.shieldL)}
+    if(cls==='paladin'||(isG&&S.shield==='kite')){
+      const face=isG?P.cape:P.shield, rim=isG?STEEL:P.trim, emb=isG?STEELL:P.trim;
+      if(d===0){for(let y=28;y<=45;y++){const w=y<38?9:Math.max(1,9-Math.round((y-38)*1.3));const x0=29-w/2|0;R(x0,y,w,1,face);R(x0,y,1,1,rim);R(x0+w-1,y,1,1,rim)}R(25,28,9,1,rim);R(28,30,2,10,emb);R(26,33,6,2,emb);if(!isG)R(26,29,2,7,P.shieldL)}
       else if(d===1){for(let y=28;y<=44;y++){const w=y<38?9:Math.max(1,9-Math.round((y-38)*1.3));R(11-w/2|0,y,w,1,'#6a5a48')}R(8,32,6,1,'#3a2e22');R(8,38,6,1,'#3a2e22')}
-      else{R(23,28,5,16,P.shield);R(27,28,1,16,P.trim);R(23,28,5,1,P.trim)}
+      else{R(23,28,5,16,face);R(27,28,1,16,rim);R(23,28,5,1,rim)}
+      return;
     }
-    if(cls==='clerigo'||cls==='guerrero'){
-      const big=cls==='guerrero', wc=big?P.wood:'#8a6a3a', wd=big?P.woodD:'#5e4422';
+    if(isG&&S.shield==='none') return;
+    if(isG&&S.shield==='buckler'){
+      const rr=3, cx=d===1?11:d===2?25:29, cy=34;
+      for(let y=-rr;y<=rr;y++){const w=Math.round(Math.sqrt(rr*rr-y*y+1)*2);R(cx-(w>>1),cy+y,w,1,d===1?STEELD:STEEL)}
+      if(d!==1){R(cx-1,cy-1,2,2,P.cape);R(cx-2,cy-rr,2,1,STEELL)}
+      return;
+    }
+    if(cls==='clerigo'||isG){
+      const big=isG, wc=big?P.wood:'#8a6a3a', wd=big?P.woodD:'#5e4422';
       const rr=big?6:4, cx=d===1?(big?10:11):d===2?25:(big?29:29), cy=big?35:34;
       for(let y=-rr;y<=rr;y++){const w=Math.round(Math.sqrt(rr*rr-y*y+1)*2);R(cx-(w>>1),cy+y,w,1,d===1?wd:wc)}
       if(d!==1){R(cx-1,cy-1,3,3,'#b8b8b8');R(cx-(rr),cy,1,1,'#888');R(cx-2,cy-rr+1,2,1,'rgba(255,255,255,.3)')}
@@ -511,17 +765,19 @@ function makeChar(cls,dir,frame,atk){
   }
 
   // --- orden de dibujo según dirección ---
-  const wtype=WEAPON[cls];
+  const wtype=S.weapon||WEAPON[cls];
+  const dual=isA&&!S.single;                 // asesino: arma en las dos manos
+  const offType=S.off||(dual?wtype:null);
   if(d===0){
     capeBack(); legs(); torso(); arms(); head(); headgear();
     drawWeapon(11,40+la,atk?'down':'up',wtype);
-    if(cls==='asesino') drawWeapon(28,40-la,atk?'up':'up',wtype);
+    if(offType) drawWeapon(28,40-la,'up',offType);
     shield();
   } else if(d===1){
     if(atk) drawWeapon(28,40-la,'up',wtype);
     legs(); torso(); capeFront(); arms(); head(); headgear(); shield();
     if(!atk) drawWeapon(28,40-la,'up',wtype);
-    if(cls==='asesino') drawWeapon(11,40+la,'up',wtype);
+    if(offType) drawWeapon(11,40+la,'up',offType);
   } else {
     capeBack(); shield(); legs(); torso(); head(); headgear(); arms();
     drawWeapon(20+sw,40,atk?'fwd':'up',wtype);
@@ -645,7 +901,7 @@ function newChar(o){
   return {id:o.id,name:o.name,cls:o.cls,fac:o.fac,tx:o.x,ty:o.y,fx:o.x,fy:o.y,prog:1,moving:false,dir:o.d||0,stepPar:0,
     hp:C.hp,mhp:C.hp,mp:C.mp,mmp:C.mp,en:C.en,men:C.en,dead:!!o.dead,para:0,inmo:0,invis:!!o.inv,invisUntil:0,
     med:!!o.med,medStart:0,atkUntil:0,say:null,reviveAt:0,kills:o.k|0,deaths:o.dd|0,
-    team:o.team||null,bot:!!o.bot,lastSpell:-9,lastHit:-9,lastPot:{key:-9,click:-9},stDirty:true,lastSt:0};
+    team:o.team||null,bot:!!o.bot,skin:fixSkin(o.cls,o.skin),lastSpell:-9,lastHit:-9,lastPot:{key:-9,click:-9},stDirty:true,lastSt:0};
 }
 function rpos(c){ if(!c.moving) return [c.tx,c.ty]; return [c.fx+(c.tx-c.fx)*c.prog, c.fy+(c.ty-c.fy)*c.prog]; }
 function occupies(c,x,y){
@@ -716,7 +972,7 @@ function sendFrom(c,o){ o.from=c.id; route(o); }
 function genCode(){const A='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let s='';for(let i=0;i<5;i++)s+=A[Math.floor(Math.random()*A.length)];return s}
 function lobbyStatus(t,err){const s=$('#status');s.textContent=t;s.className=err?'err':''}
 function setLobbyBusy(b){$('#btnCreate').disabled=b;$('#btnJoin').disabled=b}
-function myInfo(){return {t:'hi',v:2,name:cleanName($('#name').value.trim()),cls:lobbyCls,fac:lobbyFac}}
+function myInfo(){return {t:'hi',v:2,name:cleanName($('#name').value.trim()),cls:lobbyCls,fac:lobbyFac,skin:lobbySkin[lobbyCls]|0}}
 
 // ---------- anfitrión ----------
 function hostRoom(){
@@ -749,7 +1005,7 @@ function hostRoom(){
     else logm('Error de red: '+(e.type||e.message),COL.dmg);
   });
 }
-function rosterEntry(c){return {id:c.id,name:c.name,cls:c.cls,fac:c.fac,x:c.tx,y:c.ty,d:c.dir,dead:c.dead?1:0,inv:c.invis?1:0,med:c.med?1:0,k:c.kills,dd:c.deaths,team:c.team,bot:c.bot?1:0}}
+function rosterEntry(c){return {id:c.id,name:c.name,cls:c.cls,fac:c.fac,x:c.tx,y:c.ty,d:c.dir,dead:c.dead?1:0,inv:c.invis?1:0,med:c.med?1:0,k:c.kills,dd:c.deaths,team:c.team,bot:c.bot?1:0,skin:c.skin}}
 function hostReceive(L,m){
   if(!m||!m.t) return;
   if(m.t==='hi'){
@@ -757,7 +1013,7 @@ function hostReceive(L,m){
     if(players.size+1>=MAX_PLAYERS){ rawSend(L,{t:'full'}); setTimeout(()=>L.close(),800); return; }
     const pid='p'+(Net.nextPid++); L.pid=pid; Net.links.set(pid,L);
     const team=teamMode?'H':null, sp=freeSpawn(team);
-    const c=newChar({id:pid,name:cleanName(m.name),cls:CLASSES[m.cls]?m.cls:'mago',fac:m.fac==='k'?'k':'c',x:sp.x,y:sp.y,team});
+    const c=newChar({id:pid,name:cleanName(m.name),cls:CLASSES[m.cls]?m.cls:'mago',fac:m.fac==='k'?'k':'c',x:sp.x,y:sp.y,team,skin:m.skin});
     const roster=allChars().map(rosterEntry);
     players.set(pid,c);
     rawSend(L,{t:'welcome',from:myId,you:pid,sx:sp.x,sy:sp.y,roster,tm:teamMode?1:0,team});
@@ -853,7 +1109,7 @@ function onMsg(m){
     case 'death': {
       s.dead=true; s.deaths++; addFx('death',s);
       const k=m.killer?charById(m.killer):null;
-      if(k){ k.kills++; if(k===me){logm('¡Has matado a '+s.name+'!',COL.kill); sfx('death',.7)} else logm(k.name+' ha matado a '+s.name+'.',COL.kill); }
+      if(k){ k.kills++; botCalm(k); if(k===me){logm('¡Has matado a '+s.name+'!',COL.kill); sfx('death',.7)} else logm(k.name+' ha matado a '+s.name+'.',COL.kill); }
       else logm(s.name+' ha muerto.',COL.kill);
       break;
     }
@@ -978,7 +1234,7 @@ function checkDeath(v,from){
   me.hp=0; me.dead=true; me.reviveAt=now()+REVIVE_TIME; me.med=false; me.para=0; me.inmo=0; me.invis=false; targeting=false;
   me.deaths++;
   const killer=from&&from!==me?from:null;
-  if(killer){ killer.kills++; logm('¡'+killer.name+' te ha matado!',COL.dmg); } else logm('¡Has muerto!',COL.dmg);
+  if(killer){ killer.kills++; botCalm(killer); logm('¡'+killer.name+' te ha matado!',COL.dmg); } else logm('¡Has muerto!',COL.dmg);
   sfx('death'); addFx('death',me);
   netSend({t:'death',killer:killer?killer.id:null});
   dirty(); sendState();
@@ -1042,9 +1298,11 @@ function toggleMed(){
 //  velocidad de las manos, la reacción y los errores.
 // =====================================================================
 const BOT_LEVELS={
-  facil:  {n:'Fácil',  hand:.60, react:1.2, miss:.22, potHp:.40, potMp:.10, slack:[.35,1.1], lethal:false, shared:true,  remoAlly:false, kite:false},
-  normal: {n:'Normal', hand:.36, react:.6,  miss:.08, potHp:.50, potMp:.20, slack:[.08,.42], lethal:true,  shared:false, remoAlly:true,  kite:true, clickHp:.30},
-  dificil:{n:'Difícil',hand:.17, react:.17, miss:0,   potHp:.72, potMp:.30, slack:[0,.06],   lethal:true,  shared:false, remoAlly:true,  kite:true, clickHp:.72, focus:true},
+  // hand: tiempo entre acciones de una mano · react: tardanza en removerse · miss/aimMove: errar el click (quieto / si te movés)
+  // acquire: cuánto tarda en "encontrarte" cuando aparecés o resucitás · castGap: demora extra entre hechizos · calm: pausa tras matar
+  facil:  {n:'Fácil',  hand:.75, react:1.6, miss:.15, aimMove:.45, acquire:[1.0,1.8], castGap:[.5,1.3],  calm:[3,5],    potHp:.35, potMp:.10, slack:[.3,1.0], lethal:false, shared:true,  remoAlly:false, kite:false},
+  normal: {n:'Normal', hand:.45, react:.95, miss:.08, aimMove:.32, acquire:[.7,1.2],  castGap:[.25,.65], calm:[2.5,4],  potHp:.45, potMp:.18, slack:[.1,.45], lethal:true,  shared:false, remoAlly:true,  kite:true, clickHp:.25},
+  dificil:{n:'Difícil',hand:.30, react:.55, miss:.04, aimMove:.20, acquire:[.45,.8], castGap:[.12,.35], calm:[1.8,3],  potHp:.55, potMp:.25, slack:[.05,.2], lethal:true,  shared:false, remoAlly:true,  kite:true, clickHp:.40, focus:true},
 };
 const BOT_NAMES=['Zoltan','Mordek','Ignis','Valkar','Krator','Sombra','Tremor','Nahuel'];
 const BOT_MIX=['mago','paladin','clerigo','asesino','guerrero'];
@@ -1057,9 +1315,9 @@ function dirTo(a,b){const dx=b.tx-a.tx,dy=b.ty-a.ty;return Math.abs(dx)>=Math.ab
 function addBot(cls,lvl,team){
   botSeq++;
   const id='b'+botSeq, tm=team||'B', sp=freeSpawn(tm);
-  const c=newChar({id,name:BOT_NAMES[(botSeq-1)%BOT_NAMES.length],cls,fac:'k',x:sp.x,y:sp.y,team:tm,bot:1});
+  const c=newChar({id,name:BOT_NAMES[(botSeq-1)%BOT_NAMES.length],cls,fac:'k',x:sp.x,y:sp.y,team:tm,bot:1,skin:irnd(0,skinCount(cls)-1)});
   c.lvl=BOT_LEVELS[lvl]?lvl:'normal';
-  c.brain={mouse:0,keys:0,think:0,paraAt:0,tgt:null,nextStep:0,wander:null};
+  c.brain={mouse:0,keys:0,think:0,paraAt:0,tgt:null,nextStep:0,wander:null,seen:{},dmg:[],calmUntil:0};
   players.set(id,c);
   for(const L of Net.links.values()) rawSend(L,{t:'join',from:myId,...rosterEntry(c)});
   logm(c.name+' ('+CLASSES[cls].n+', bot '+BOT_LEVELS[c.lvl].n.toLowerCase()+') ha entrado a la arena.',COL.sys);
@@ -1134,8 +1392,8 @@ function botCast(b,sid,target){
   sendFrom(b,{t:'fx',k:sp.fx,tgt:target.id,snd:sp.snd});
   let raw=0;
   if(sp.min!=null){ raw=irnd(sp.min,sp.max); if(sp.type==='dmg'||sp.type==='heal') raw=Math.round(raw*C.mag*(sp.type==='heal'&&b.cls==='clerigo'?1.3:1)); }
-  if(target===me){ applySpell(me,sid,raw,b); checkDeath(me,b); }
-  else if(target.bot){ applySpell(target,sid,raw,b); checkDeath(target,b); }
+  if(target===me){ botNote(b,me.id,applySpell(me,sid,raw,b)); checkDeath(me,b); }
+  else if(target.bot){ botNote(b,target.id,applySpell(target,sid,raw,b)); checkDeath(target,b); }
   else sendFrom(b,{t:'act',to:target.id,s:sid,raw});
   b.stDirty=true; return true;
 }
@@ -1149,18 +1407,26 @@ function botMelee(b,tgt){
     let raw=irnd(C.hit[0],C.hit[1]), stab=false;
     if(C.stab&&Math.random()<C.stab){raw=Math.round(raw*1.6);stab=true}
     addFx('blood',tgt);
-    if(tgt===me){ takeHit(me,raw,stab,b); checkDeath(me,b); }
-    else if(tgt.bot){ takeHit(tgt,raw,stab,b); checkDeath(tgt,b); }
+    if(tgt===me){ botNote(b,me.id,takeHit(me,raw,stab,b).a); checkDeath(me,b); }
+    else if(tgt.bot){ botNote(b,tgt.id,takeHit(tgt,raw,stab,b).a); checkDeath(tgt,b); }
     else sendFrom(b,{t:'hit',to:tgt.id,raw,stab});
   } else { if(tgt===me) logm('¡'+b.name+' te atacó y falló!',COL.dmg); else if(!tgt.bot) sendFrom(b,{t:'miss',to:tgt.id}); }
   b.stDirty=true; return true;
 }
 // daño esperado de un hechizo contra ese objetivo (para decidir si remata)
+function botNote(b,id,a){ if(b&&b.brain&&a>0) b.brain.dmg.push({id,a,t:now()}); }
+function botCalm(k){ if(k&&k.bot&&isHost){ const L=BOT_LEVELS[k.lvl]; k.brain.calmUntil=now()+rnd(L.calm[0],L.calm[1]); k.brain.tgt=null; } }
+// vida estimada: daño reciente que le hizo, menos lo que probablemente poteó (no ve la barra del enemigo)
+function estHp(b,tgt){
+  const t=now(), rec=b.brain.dmg.filter(x=>x.id===tgt.id&&t-x.t<5);
+  if(!rec.length) return tgt.mhp;
+  return Math.min(tgt.mhp, tgt.mhp-rec.reduce((n,x)=>n+x.a,0)+(t-rec[0].t)*30);
+}
 function expDmg(b,sid,tgt){const sp=SPELLS[sid];return (sp.min+sp.max)/2*CLASSES[b.cls].mag-CLASSES[tgt.cls].mdef*.75}
 function lethalSpell(b,tgt){
   const S=CLASSES[b.cls].spells;
   for(const s of ['apoca','descarga','tormenta','flechae','dardo'])
-    if(S.includes(s)&&b.mp>=SPELLS[s].mana&&expDmg(b,s,tgt)>=tgt.hp+(b.lvl==='dificil'?0:8)) return s;
+    if(S.includes(s)&&b.mp>=SPELLS[s].mana&&expDmg(b,s,tgt)>=estHp(b,tgt)+(b.lvl==='dificil'?0:10)) return s;
   return null;
 }
 function botOffense(b,tgt,t){
@@ -1184,16 +1450,24 @@ function botThink(b,t){
   const L=BOT_LEVELS[b.lvl], C=CLASSES[b.cls], br=b.brain;
   const foes=allChars().filter(c=>c!==b&&!c.dead&&!isAlly(b,c));
   const seen=foes.filter(c=>!c.invis);
+  // tiempo para "encontrar" a cada enemigo cuando aparece en pantalla (o resucita)
+  for(const c of seen){ if(inCastRange(b,c)){ if(br.seen[c.id]==null) br.seen[c.id]=t+rnd(L.acquire[0],L.acquire[1]); } else delete br.seen[c.id]; }
+  for(const id in br.seen) if(!seen.some(c=>c.id===id)) delete br.seen[id];
+  br.dmg=br.dmg.filter(x=>t-x.t<6);
+  const ready=c=>c&&br.seen[c.id]!=null&&t>=br.seen[c.id];
+  const calm=t<br.calmUntil;
   let tgt=br.tgt?seen.find(c=>c.id===br.tgt):null;
-  if(b.lvl!=='facil'){
+  if(L.focus&&!calm){
     const mate=allChars().find(c=>c.bot&&c!==b&&isAlly(b,c)&&!c.dead&&c.brain.tgt&&seen.some(x=>x.id===c.brain.tgt&&inCastRange(b,x)));
-    if(mate&&(!tgt||Math.random()<.3)) tgt=seen.find(x=>x.id===mate.brain.tgt);
+    if(mate&&(!tgt||Math.random()<.15)) tgt=seen.find(x=>x.id===mate.brain.tgt);
   }
-  if(!tgt||Math.random()<.04){
-    if(b.lvl==='dificil'){ const r=seen.filter(c=>inCastRange(b,c)); tgt=(r.length?r:seen).sort((x,y)=>(x.hp/x.mhp)-(y.hp/y.mhp)||dist(b,x)-dist(b,y))[0]||null; }
-    else tgt=seen.sort((x,y)=>dist(b,x)-dist(b,y))[0]||null;
+  if(!tgt||Math.random()<.03){
+    const r=seen.filter(c=>inCastRange(b,c));
+    tgt=(r.length?r:seen).sort((x,y)=>(L.focus?((y.para||y.inmo?1:0)-(x.para||x.inmo?1:0)):0)||dist(b,x)-dist(b,y))[0]||null;
   }
+  if(calm) tgt=null;
   br.tgt=tgt?tgt.id:null;
+  const tReady=ready(tgt);
   const paraMe=!!(b.para||b.inmo);
   if(paraMe){ if(!br.paraAt) br.paraAt=t; } else br.paraAt=0;
   const hpR=b.hp/b.mhp, mpR=b.mmp?b.mp/b.mmp:1;
@@ -1207,11 +1481,11 @@ function botThink(b,t){
   if(t>=br.keys){
     let did=false;
     if(hpR<L.potHp) did=botPot(b,'potR','key');
-    else if(meleeCls&&tgt&&dist(b,tgt)===1&&t-b.lastHit>=CD.hit&&t-b.lastSpell>=CD.combo&&!b.para&&b.en>=10){ botFace(b,tgt); did=botMelee(b,tgt); }
+    else if(meleeCls&&tReady&&dist(b,tgt)===1&&t-b.lastHit>=CD.hit&&t-b.lastSpell>=CD.combo&&!b.para&&b.en>=10){ botFace(b,tgt); did=botMelee(b,tgt); }
     else if(b.mmp&&mpR<L.potMp) did=botPot(b,'potB','key');
     else if(b.mmp&&mpR<.5&&!nearFoe&&!b.med&&!b.moving){ b.med=true; b.medStart=t; b.stDirty=true; did=true; }
     else if(b.lvl!=='facil'&&b.mmp&&mpR<.85&&hpR>.8) did=botPot(b,'potB','key');
-    else if(b.lvl==='dificil'&&hpR<.93) did=botPot(b,'potR','key');
+    else if(b.lvl==='dificil'&&hpR<.8) did=botPot(b,'potR','key');
     if(did) useKeys();
   }
   // ---------- MOUSE ----------
@@ -1221,20 +1495,21 @@ function botThink(b,t){
     if(canSpell){
       // paralizado: me remuevo, salvo que con un hechizo más el enemigo casi seguro muera
       if(paraMe&&C.spells.includes('remo')&&t-br.paraAt>=L.react){
-        const k=L.lethal&&tgt&&inCastRange(b,tgt)?lethalSpell(b,tgt):null;
+        const k=L.lethal&&tReady&&inCastRange(b,tgt)?lethalSpell(b,tgt):null;
         act=k?[k,tgt]:(b.mp>=SPELLS.remo.mana?['remo',b]:null);
       }
       if(!act&&L.remoAlly&&C.spells.includes('remo')&&b.mp>=SPELLS.remo.mana+300){
         const al=allChars().find(c=>c!==b&&isAlly(b,c)&&!c.dead&&(c.para||c.inmo)&&inCastRange(b,c)&&(!c.bot||t-c.brain.paraAt>.8));
         if(al) act=['remo',al];
       }
-      if(!act&&!paraMe&&tgt&&L.lethal){ const k=lethalSpell(b,tgt); if(k&&inCastRange(b,tgt)) act=[k,tgt]; }
+      if(!act&&!paraMe&&tReady&&L.lethal){ const k=lethalSpell(b,tgt); if(k&&inCastRange(b,tgt)) act=[k,tgt]; }
       if(!act&&hpR<.35&&b.cls!=='mago'&&C.spells.includes('chg')&&b.mp>=SPELLS.chg.mana&&Math.random()<.5) act=['chg',b];
-      if(!act&&tgt&&inCastRange(b,tgt)&&!(paraMe&&b.lvl!=='facil'&&C.spells.includes('remo'))) act=botOffense(b,tgt,t);
+      if(!act&&tReady&&inCastRange(b,tgt)&&!(paraMe&&b.lvl!=='facil'&&C.spells.includes('remo'))) act=botOffense(b,tgt,t);
     }
     if(act){
-      if(act[1]!==b&&Math.random()<L.miss) useMouse();                 // click errado
-      else if(botCast(b,act[0],act[1])) useMouse();
+      const missP=act[1]===b?0:L.miss+(act[1].moving?L.aimMove:0);
+      if(Math.random()<missP) br.mouse=t+L.hand*.8+slack();          // click errado (más fácil si te estás moviendo)
+      else if(botCast(b,act[0],act[1])){ br.mouse=t+L.hand+rnd(L.castGap[0],L.castGap[1]); if(L.shared) br.keys=br.mouse; }
     } else if(!L.shared){                                              // mano libre: pociones por click
       if(hpR<(L.clickHp||L.potHp)&&botPot(b,'potR','click')) useMouse();
       else if(b.mmp&&mpR<L.potMp+.1&&botPot(b,'potB','click')) useMouse();
@@ -1278,7 +1553,9 @@ function botRevive(b){
   addFx('revive',b); sendFrom(b,{t:'mv',x:b.tx,y:b.ty,d:b.dir,s:1}); b.stDirty=true;
 }
 function botMsg(b,m){
-  const s=charById(m.from); if(!s||b.dead) return;
+  const s=charById(m.from); if(!s) return;
+  if(m.t==='res'){ if(SPELLS[m.s]&&SPELLS[m.s].type!=='dmg'&&SPELLS[m.s].type!=='arrow') return; botNote(b,s.id,m.a|0); return; }
+  if(b.dead) return;
   if(m.t==='act'&&SPELLS[m.s]){ const a=applySpell(b,m.s,Number(m.raw)||0,s); sendFrom(b,{t:'res',to:s.id,s:m.s,a}); checkDeath(b,s); }
   else if(m.t==='hit'){ const r=takeHit(b,m.raw,m.stab,s); sendFrom(b,{t:'res',to:s.id,s:'melee',a:r.a,p:r.part,stab:m.stab?1:0}); checkDeath(b,s); }
 }
@@ -1525,7 +1802,7 @@ function drawChar(c,sx,sy,isMe,t){
     ctx.fillStyle=gr; ell(ctx,sx+16,sy+10,30,34);
   }
   if(c.dead){ if(!GHOST[c.dir])GHOST[c.dir]=makeGhost(c.dir); ctx.globalAlpha*=.7; ctx.drawImage(GHOST[c.dir],sx-4,sy-26+Math.round(Math.sin(t*3)*2)); }
-  else ctx.drawImage(makeChar(c.cls,c.dir,frameFor(c),t<c.atkUntil),sx-4,sy-25);
+  else ctx.drawImage(makeChar(c.cls,c.dir,frameFor(c),t<c.atkUntil,c.skin),sx-4,sy-25);
   if(c.med&&!c.dead){
     ctx.globalCompositeOperation='lighter';
     for(let i=0;i<7;i++){const a=t*2+i*.9, yy=sy+20-((t*18+i*9)%44); ctx.fillStyle=`rgba(150,210,255,${.8})`; ctx.fillRect(sx+16+Math.cos(a)*14,yy,2,2)}
@@ -1868,19 +2145,29 @@ canvas.addEventListener('dblclick',e=>{
 // =====================================================================
 //  Lobby / inicio
 // =====================================================================
-let lobbyCls='mago', lobbyFac='c';
+let lobbyCls='mago', lobbyFac='c', lobbySkin={};
 function buildLobby(){
-  try{const s=JSON.parse(localStorage.getItem('aoArena')||'{}'); if(s.name)$('#name').value=s.name; if(CLASSES[s.cls])lobbyCls=s.cls; if(s.fac)lobbyFac=s.fac; if(s.bn!=null){$('#botN').value=s.bn;$('#botLvl').value=s.bl;$('#botCls').value=s.bc}}catch(e){}
+  try{const s=JSON.parse(localStorage.getItem('aoArena')||'{}'); if(s.name)$('#name').value=s.name; if(CLASSES[s.cls])lobbyCls=s.cls; if(s.fac)lobbyFac=s.fac; if(s.skins&&typeof s.skins==='object') for(const k in s.skins) if(CLASSES[k]) lobbySkin[k]=fixSkin(k,s.skins[k]); if(s.bn!=null){$('#botN').value=s.bn;$('#botLvl').value=s.bl;$('#botCls').value=s.bc}}catch(e){}
   const box=$('#classes');
   for(const k of CLS_ORDER){
     const d=document.createElement('div'); d.className='cls'; d.dataset.k=k;
-    const c=cv(40,60); c.getContext('2d').drawImage(makeChar(k,0,0,false),0,0);
+    const c=cv(40,60); c.getContext('2d').drawImage(makeChar(k,0,0,false,lobbySkin[k]|0),0,0);
     d.appendChild(c); d.appendChild(document.createTextNode(CLASSES[k].n));
     d.onclick=()=>{lobbyCls=k;refresh()}; box.appendChild(d);
   }
   $('#facC').onclick=()=>{lobbyFac='c';refresh()}; $('#facK').onclick=()=>{lobbyFac='k';refresh()};
   function refresh(){
-    document.querySelectorAll('.cls').forEach(e=>e.classList.toggle('sel',e.dataset.k===lobbyCls));
+    document.querySelectorAll('.cls').forEach(e=>{ e.classList.toggle('sel',e.dataset.k===lobbyCls);
+      const g=e.querySelector('canvas').getContext('2d'); g.clearRect(0,0,40,60); g.drawImage(makeChar(e.dataset.k,0,0,false,lobbySkin[e.dataset.k]|0),0,0); });
+    const sb=$('#skins'); sb.innerHTML='';
+    const n=skinCount(lobbyCls);
+    if(n<=1){ sb.innerHTML='<div class="noskin">Esta clase tiene un solo aspecto por ahora.</div>'; }
+    else for(let i=0;i<n;i++){
+      const d=document.createElement('div'); d.className='skin'+((lobbySkin[lobbyCls]|0)===i?' sel':'');
+      for(const dir of [0,3]){ const c=cv(40,60); c.getContext('2d').drawImage(makeChar(lobbyCls,dir,0,false,i),0,0); d.appendChild(c); }
+      const t=document.createElement('div'); t.textContent=SKINS[lobbyCls][i].n; d.appendChild(t);
+      d.onclick=()=>{lobbySkin[lobbyCls]=i;refresh()}; sb.appendChild(d);
+    }
     const C=CLASSES[lobbyCls]; $('#clsDesc').textContent=C.desc+'  Vida '+C.hp+' · Maná '+C.mp+'.';
     $('#facC').classList.toggle('on',lobbyFac==='c'); $('#facK').classList.toggle('on',lobbyFac==='k');
   }
@@ -1888,7 +2175,7 @@ function buildLobby(){
   const go=(fn)=>{
     const name=$('#name').value.trim().replace(/[<>]/g,'').slice(0,14);
     if(!name){lobbyStatus('Escribí un nombre.',true);return false}
-    try{localStorage.setItem('aoArena',JSON.stringify({name,cls:lobbyCls,fac:lobbyFac,bn:$('#botN').value,bl:$('#botLvl').value,bc:$('#botCls').value}))}catch(e){}
+    try{localStorage.setItem('aoArena',JSON.stringify({name,cls:lobbyCls,fac:lobbyFac,skins:lobbySkin,bn:$('#botN').value,bl:$('#botLvl').value,bc:$('#botCls').value}))}catch(e){}
     audioInit(); enterFS(); fn(name); return true;
   };
   $('#btnCreate').onclick=()=>go(()=>hostRoom());
@@ -1899,7 +2186,7 @@ function buildLobby(){
 function startGame(sp){
   if(started) return;
   const name=cleanName($('#name').value.trim());
-  me=newChar({id:myId,name,cls:lobbyCls,fac:lobbyFac,x:sp.x,y:sp.y});
+  me=newChar({id:myId,name,cls:lobbyCls,fac:lobbyFac,x:sp.x,y:sp.y,skin:lobbySkin[lobbyCls]|0});
   const C=CLASSES[me.cls];
   inv=[{k:'potR',n:'Poción Roja',d:'Restaura 30 puntos de vida. Atajo: Q. Usar seleccionado: Espacio',count:2000},
        {k:'potB',n:'Poción Azul',d:'Restaura maná (3% + 12). Atajo: E. Usar seleccionado: Espacio',count:2000}];
