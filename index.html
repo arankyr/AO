@@ -621,12 +621,13 @@ let started=false, me=null, isHost=false, roomCode='', myId='';
 const players=new Map();          // id -> personaje (todos menos yo)
 const MAX_PLAYERS=8;
 let tab=0, selSlot=0, selSpell=0, targeting=false, typing=false, chatBuf='';
-let lastSpell=-9, lastHit=-9, lastPot=-9, nextTick=0;
+let lastSpell=-9, lastHit=-9, nextTick=0;
+const lastPot={key:-9,click:-9};   // intervalos separados: teclado y click van por acciones distintas
 let ping=0, fps=60;
 let consoleLines=[], fxs=[], floats=[];
 let camX=0, camY=0, mouse={x:0,y:0,inView:false};
 let held=[], inv=[], lastThrottled={};
-let netState='', stDirty=true, lastSt=0;
+let netState='', stDirty=true, lastSt=0, spellOrder=[], invFlash={i:-1,t:0};
 let uiBg=null;
 
 function newChar(o){
@@ -645,11 +646,11 @@ const allChars=()=>me?[me,...players.values()]:[...players.values()];
 const charById=id=>id===myId?me:players.get(id);
 function charAtTile(x,y){ for(const c of players.values()) if(!c.dead&&occupies(c,x,y)) return c; return null; }
 // personaje bajo el cursor: su baldosa + media baldosa hacia arriba (solo alto, el ancho es 1 tile)
-function pickChar(wx,wy){
+function pickChar(wx,wy,withDead){
   let best=null, bs=-1;
   const col=Math.floor(wx/T);
   for(const c of allChars()){
-    if(c.dead||col!==c.tx) continue;
+    if((c.dead&&!withDead)||col!==c.tx) continue;
     if(wy<(c.ty-.5)*T||wy>=(c.ty+1)*T) continue;
     const score=(wy>=c.ty*T?2:1)+c.ty/1e6;
     if(score>bs){bs=score;best=c}
@@ -861,12 +862,12 @@ function revealIfInvis(){ if(me.invis){me.invis=false;logm('Has vuelto a ser vis
 function startTargeting(){
   if(!started) return;
   if(me.dead){logThrottle('dead','¡Estás muerto!',COL.dmg);return}
-  const sid=CLASSES[me.cls].spells[selSpell]; if(!sid) return;
+  const sid=spellOrder[selSpell]; if(!sid) return;
   targeting=true;
 }
 // wx,wy: posición en píxeles de mundo donde se hizo click
 function castAt(wx,wy){
-  const t=now(), C=CLASSES[me.cls], sid=C.spells[selSpell], sp=SPELLS[sid];
+  const t=now(), C=CLASSES[me.cls], sid=spellOrder[selSpell], sp=SPELLS[sid];
   if(!sp){targeting=false;return}
   if(me.dead){targeting=false;logm('¡Estás muerto!',COL.dmg);return}
   const cd=sp.type==='arrow'?CD.arrow:CD.spell;
@@ -980,19 +981,20 @@ function melee(){
   } else sfx('swing');
   dirty();
 }
-function useItem(idx){
+function useItem(idx,via){
+  via=via==='click'?'click':'key';
   if(idx==null) idx=selSlot;
   if(idx<0) return;
   const it=inv[idx]; if(!it) return;
   const t=now();
   if(me.dead){logThrottle('dead','¡Estás muerto!',COL.dmg);return}
   if(it.k==='potR'||it.k==='potB'){
-    if(t-lastPot<CD.pot) return;
+    if(t-lastPot[via]<CD.pot) return;
     if(it.count<=0){logm('No te quedan pociones.',COL.info);return}
     if(it.k==='potB'&&me.mmp===0){logThrottle('nomp','Tu clase no usa maná.',COL.info);return}
-    lastPot=t; it.count--;
-    if(it.k==='potR') me.hp=Math.min(me.mhp,me.hp+30);
-    else me.mp=Math.min(me.mmp,me.mp+Math.round(me.mmp*.03+12));
+    lastPot[via]=t; it.count--; invFlash={i:idx,t};
+    if(it.k==='potR'){ const a=Math.min(30,me.mhp-me.hp); me.hp+=a; addFloat(me,'+'+a,'#ff7070'); }
+    else { const a=Math.min(Math.round(me.mmp*.03+12),me.mmp-me.mp); me.mp+=a; addFloat(me,'+'+a,'#70a0ff'); }
     sfx('pot',.7); addFx(it.k==='potR'?'potR':'potB',me); dirty();
   } else if(it.k==='arrows'||it.k==='bow'){ logThrottle('arr','Seleccioná "Disparar Flecha" en HECHIZOS y apretá LANZAR.',COL.info);
   } else logThrottle('eq',it.n+' (equipado).',COL.info);
@@ -1262,10 +1264,12 @@ function buttons(){
   B.push({x:578,y:72,w:100,h:22,label:'INVENTARIO',on:tab===0,fn:()=>tab=0});
   B.push({x:680,y:72,w:100,h:22,label:'HECHIZOS',on:tab===1,fn:()=>tab=1});
   if(tab===1){
+    B.push({x:SPL_X+SPL_W+3,y:SPL_Y,w:17,h:40,tri:'up',fn:()=>moveSpell(-1)});
+    B.push({x:SPL_X+SPL_W+3,y:SPL_Y+44,w:17,h:40,tri:'down',fn:()=>moveSpell(1)});
     B.push({x:578,y:296,w:100,h:22,label:'LANZAR',fn:startTargeting});
-    B.push({x:680,y:296,w:100,h:22,label:'INFO',fn:()=>{const sp=SPELLS[CLASSES[me.cls].spells[selSpell]]; if(sp){let s=sp.n+': '+sp.d+' Maná: '+sp.mana+'.'; if(sp.min!=null)s+=' Potencia: '+sp.min+'-'+sp.max+'.'; if(sp.dur)s+=' Duración: '+sp.dur+'s.'; logm(s,COL.sys)}}});
+    B.push({x:680,y:296,w:100,h:22,label:'INFO',fn:()=>{const sp=SPELLS[spellOrder[selSpell]]; if(sp){let s=sp.n+': '+sp.d+' Maná: '+sp.mana+'.'; if(sp.min!=null)s+=' Potencia: '+sp.min+'-'+sp.max+'.'; if(sp.dur)s+=' Duración: '+sp.dur+'s.'; logm(s,COL.sys)}}});
   } else {
-    B.push({x:578,y:296,w:100,h:22,label:'USAR (ESP)',fn:()=>useItem()});
+    B.push({x:578,y:296,w:100,h:22,label:'USAR (ESP)',fn:()=>useItem(selSlot,'click')});
   }
   B.push({x:578,y:562,w:100,h:22,label:'PANTALLA',fn:toggleFS});
   B.push({x:680,y:562,w:100,h:22,label:sndOn?'SONIDO: SÍ':'SONIDO: NO',fn:()=>{sndOn=!sndOn}});
@@ -1276,10 +1280,11 @@ function drawButton(b){
   const gr=ctx.createLinearGradient(0,b.y,0,b.y+b.h); gr.addColorStop(0,b.on?'#7a5a20':hov?'#6e5530':'#5a4524'); gr.addColorStop(1,b.on?'#3a2810':'#2e2210');
   ctx.fillStyle='#000'; ctx.fillRect(b.x-1,b.y-1,b.w+2,b.h+2); ctx.fillStyle=gr; ctx.fillRect(b.x,b.y,b.w,b.h);
   ctx.fillStyle=b.on?'#e9c46a':'#a88a4a'; ctx.fillRect(b.x,b.y,b.w,1);
+  if(b.tri){ const cx=b.x+b.w/2, cy=b.y+b.h/2, d=b.tri==='up'?-1:1; ctx.fillStyle=hov?'#fff':'#f0e0b0'; ctx.beginPath(); ctx.moveTo(cx-5,cy-3*d); ctx.lineTo(cx+5,cy-3*d); ctx.lineTo(cx,cy+4*d); ctx.closePath(); ctx.fill(); return; }
   txt(b.label,b.x+b.w/2,b.y+15,b.on?'#fff':'#f0e0b0','bold 10px Tahoma, Verdana, sans-serif','center');
 }
 const INV_X=589, INV_Y=104, CELL=36;
-const SPL_X=578, SPL_Y=104, ROW=18;
+const SPL_X=578, SPL_Y=104, ROW=18, SPL_W=182;
 function drawPanel(t){
   const C=CLASSES[me.cls];
   txt(me.name,679,27,me.fac==='k'?'#ff4a3a':'#5aaaff','bold 15px Georgia, serif','center');
@@ -1298,21 +1303,22 @@ function drawPanel(t){
       if(it.count!=null) txt(String(it.count),x+2,y+32,'#fff','9px Tahoma, sans-serif');
       if(it.eq) txt('+',x+28,y+11,'#ffd24a','bold 11px Tahoma, sans-serif');
       if(i===selSlot){ctx.strokeStyle='#e9c46a';ctx.lineWidth=1;ctx.strokeRect(x+.5,y+.5,CELL-3,CELL-3)}
+      if(i===invFlash.i&&t-invFlash.t<.2){ctx.fillStyle=`rgba(255,255,255,${.35*(1-(t-invFlash.t)/.2)})`;ctx.fillRect(x+1,y+1,CELL-4,CELL-4)}
     }
     const it=inv[selSlot];
     if(it){ txt(it.n,679,262,'#e9c46a','bold 11px Tahoma, sans-serif','center'); wrap(it.d,200,'10px Tahoma, sans-serif').forEach((l,i)=>txt(l,679,276+i*12,'#b0a080','10px Tahoma, sans-serif','center')); }
   } else {
-    ctx.fillStyle='#000'; ctx.fillRect(SPL_X,SPL_Y,202,184);
-    C.spells.forEach((sid,i)=>{
+    ctx.fillStyle='#000'; ctx.fillRect(SPL_X,SPL_Y,SPL_W,184);
+    spellOrder.forEach((sid,i)=>{
       const sp=SPELLS[sid], y=SPL_Y+2+i*ROW;
-      if(i===selSpell){ctx.fillStyle='#1c3f8a';ctx.fillRect(SPL_X+1,y,200,ROW-1)}
+      if(i===selSpell){ctx.fillStyle='#1c3f8a';ctx.fillRect(SPL_X+1,y,SPL_W-2,ROW-1)}
       const can=me.mp>=sp.mana;
       txt(sp.n,SPL_X+6,y+13,can?'#fff':'#777','11px Tahoma, Verdana, sans-serif',undefined,false);
-      if(sp.mana) txt(String(sp.mana),SPL_X+196,y+13,can?'#7fb0ff':'#555','10px Tahoma, sans-serif','right',false);
+      if(sp.mana) txt(String(sp.mana),SPL_X+SPL_W-5,y+13,can?'#7fb0ff':'#555','10px Tahoma, sans-serif','right',false);
     });
-    if(C.spells[0]==='flecha'){const a=inv.find(i=>i&&i.k==='arrows'); txt('Flechas: '+(a?a.count:0),679,276,'#b0a080','10px Tahoma, sans-serif','center')}
+    if(spellOrder[0]==='flecha'){const a=inv.find(i=>i&&i.k==='arrows'); txt('Flechas: '+(a?a.count:0),679,276,'#b0a080','10px Tahoma, sans-serif','center')}
     const cdr=clamp(1-(t-lastSpell)/CD.spell,0,1);
-    if(cdr>0){ctx.fillStyle='rgba(255,210,80,.7)';ctx.fillRect(SPL_X,SPL_Y+186,202*cdr,2)}
+    if(cdr>0){ctx.fillStyle='rgba(255,210,80,.7)';ctx.fillRect(SPL_X,SPL_Y+186,SPL_W*cdr,2)}
   }
   bar(578,338,202,16,me.hp,me.mhp,'#e83a2a','#7a0e08','Vida '+Math.round(me.hp)+'/'+me.mhp);
   bar(578,358,202,16,me.mp,me.mmp,'#3a7aff','#0e2a8a','Maná '+Math.round(me.mp)+'/'+me.mmp);
@@ -1456,13 +1462,28 @@ addEventListener('keydown',e=>{
     case 'f': case 'F': toggleFS(); break;
     case 'Tab': e.preventDefault(); tab^=1; break;
     default:
-      if(/^[1-9]$/.test(k)){const i=+k-1; if(i<CLASSES[me.cls].spells.length){selSpell=i;tab=1}}
+      if(/^[1-9]$/.test(k)){const i=+k-1; if(i<spellOrder.length){selSpell=i;tab=1}}
   }
 });
 addEventListener('keyup',e=>{ const i=held.indexOf(e.code); if(i>=0) held.splice(i,1); });
 addEventListener('blur',()=>{held=[]});
 function toLogical(e){ return [(e.clientX*dpr-offX)/sc,(e.clientY*dpr-offY)/sc]; }
-let dragList=null, dragItem=null, lastInvClick={i:-1,t:0};
+let dragList=null, dragItem=null, lastInvClick={i:-1,t:0}, lastClickUse=0;
+// orden por defecto: abajo de todo Remover, arriba Inmovilizar, Apocalipsis, Descarga; el resto arriba
+function defaultSpellOrder(cls){
+  const all=CLASSES[cls].spells, tail=['descarga','apoca','inmo','remo'];
+  return all.filter(s=>!tail.includes(s)).concat(tail.filter(s=>all.includes(s)));
+}
+function loadSpellOrder(){
+  spellOrder=defaultSpellOrder(me.cls);
+  try{ const L=JSON.parse(localStorage.getItem('aoSpells_'+me.cls)||'null');
+    if(Array.isArray(L)&&L.length===spellOrder.length&&L.slice().sort().join()===spellOrder.slice().sort().join()) spellOrder=L; }catch(e){}
+}
+function moveSpell(d){
+  const j=selSpell+d; if(j<0||j>=spellOrder.length) return;
+  [spellOrder[selSpell],spellOrder[j]]=[spellOrder[j],spellOrder[selSpell]]; selSpell=j;
+  try{localStorage.setItem('aoSpells_'+me.cls,JSON.stringify(spellOrder))}catch(e){}
+}
 function invSlotAt(x,y){const cx=Math.floor((x-INV_X)/CELL), cy=Math.floor((y-INV_Y)/CELL); return (x>=INV_X&&cx>=0&&cx<5&&y>=INV_Y&&cy>=0&&cy<4)?cy*5+cx:-1}
 function saveInvLayout(){ try{localStorage.setItem('aoInv_'+me.cls,JSON.stringify(inv.map(i=>i?i.k:null)))}catch(e){} }
 function loadInvLayout(){
@@ -1476,8 +1497,8 @@ function loadInvLayout(){
 }
 function listPick(x,y,kind,clampIt){
   if(kind==='spell'){
-    const n=CLASSES[me.cls].spells.length;
-    if(!clampIt&&!(x>=SPL_X&&x<SPL_X+202&&y>=SPL_Y&&y<SPL_Y+184)) return;
+    const n=spellOrder.length;
+    if(!clampIt&&!(x>=SPL_X&&x<SPL_X+SPL_W&&y>=SPL_Y&&y<SPL_Y+184)) return;
     const i=Math.floor((y-SPL_Y-2)/ROW); if(i>=0&&i<n) selSpell=i; else if(clampIt) selSpell=i<0?0:n-1;
   } else {
     const cx=Math.floor((x-INV_X)/CELL), cy=Math.floor((y-INV_Y)/CELL);
@@ -1497,7 +1518,7 @@ addEventListener('mouseup',e=>{
 canvas.addEventListener('mousemove',e=>{
   const [x,y]=toLogical(e); mouse.x=x; mouse.y=y;
   if(dragItem&&!dragItem.moved&&Math.hypot(x-dragItem.x0,y-dragItem.y0)>4) dragItem.moved=true;
-  if(dragList&&(e.buttons&1)&&started){ listPick(x,y,dragList,dragList==='spell'&&x>=SPL_X-20&&x<SPL_X+222); }
+  if(dragList&&(e.buttons&1)&&started){ listPick(x,y,dragList,dragList==='spell'&&x>=SPL_X-20&&x<SPL_X+SPL_W+4); }
   mouse.inView=x>=VIEW.x&&x<VIEW.x+VIEW.w&&y>=VIEW.y&&y<VIEW.y+VIEW.h;
   canvas.style.cursor=targeting&&mouse.inView?'crosshair':'default';
 });
@@ -1509,18 +1530,18 @@ canvas.addEventListener('mousedown',e=>{
   if(x>=VIEW.x&&x<VIEW.x+VIEW.w&&y>=VIEW.y&&y<VIEW.y+VIEW.h){
     const wx=x-VIEW.x+camX, wy=y-VIEW.y+camY;
     if(targeting){castAt(wx,wy);canvas.style.cursor=targeting?'crosshair':'default';return}
-    const c=pickChar(wx,wy);
-    if(c&&(c===me||!c.invis)) logm('Ves a '+c.name+' <'+CLASSES[c.cls].n+'>'+(c.para?' (paralizado)':''),COL.info);
+    const c=pickChar(wx,wy,true);
+    if(c&&(c===me||!c.invis||c.dead)) logm('Ves a '+c.name+' <'+CLASSES[c.cls].n+'>'+(c.dead?' (muerto)':c.para?' (paralizado)':''),COL.info);
     return;
   }
   for(const b of buttons()) if(x>=b.x&&x<b.x+b.w&&y>=b.y&&y<b.y+b.h){b.fn();return}
   if(tab===0){
     const i=invSlotAt(x,y), t=now();
     if(i>=0&&inv[i]){
-      if(i===lastInvClick.i&&(e.detail>=2||t-lastInvClick.t<.4)){ selSlot=i; useItem(i); lastInvClick.t=t; return; }
+      if(i===lastInvClick.i&&(e.detail>=2||t-lastInvClick.t<.5)){ selSlot=i; useItem(i,'click'); lastInvClick.t=t; lastClickUse=t; dragItem=null; return; }
       lastInvClick={i,t}; selSlot=i; dragItem={from:i,x0:x,y0:y,moved:false};
     }
-  } else if(x>=SPL_X&&x<SPL_X+202&&y>=SPL_Y&&y<SPL_Y+184){
+  } else if(x>=SPL_X&&x<SPL_X+SPL_W&&y>=SPL_Y&&y<SPL_Y+184){
     dragList='spell'; listPick(x,y,'spell');
   }
 });
@@ -1528,12 +1549,13 @@ canvas.addEventListener('mousedown',e=>{
 canvas.addEventListener('wheel',e=>{
   if(!started||tab!==1) return;
   const [x,y]=toLogical(e);
-  if(x>=572&&x<786&&y>=100&&y<324){e.preventDefault(); const n=CLASSES[me.cls].spells.length; selSpell=clamp(selSpell+(e.deltaY>0?1:-1),0,n-1)}
+  if(x>=572&&x<786&&y>=100&&y<324){e.preventDefault(); const n=spellOrder.length; selSpell=clamp(selSpell+(e.deltaY>0?1:-1),0,n-1)}
 },{passive:false});
 canvas.addEventListener('dblclick',e=>{
   if(!started) return;
   const [x,y]=toLogical(e);
-  if(tab===1&&x>=SPL_X&&x<SPL_X+202&&y>=SPL_Y&&y<SPL_Y+184) startTargeting();
+  if(tab===0){ const i=invSlotAt(x,y); if(i>=0&&inv[i]&&now()-lastClickUse>.25){ selSlot=i; useItem(i,'click'); lastClickUse=now(); } return; }
+  if(tab===1&&x>=SPL_X&&x<SPL_X+SPL_W&&y>=SPL_Y&&y<SPL_Y+184) startTargeting();
 });
 
 // =====================================================================
@@ -1577,7 +1599,7 @@ function startGame(sp){
   for(const g of C.gear) inv.push({k:g.k,n:g.n,d:g.d,eq:g.k!=='arrows',count:g.count});
   for(const it of inv) if(!ICONS[it.k]) ICONS[it.k]=makeIcon(it.k);
   while(inv.length<20) inv.push(null);
-  loadInvLayout();
+  loadInvLayout(); loadSpellOrder();
   started=true;
   $('#lobby').style.display='none';
   try{document.activeElement&&document.activeElement.blur()}catch(e){}
