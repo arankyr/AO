@@ -25,6 +25,9 @@ input[type=text]:focus{border-color:#e9c46a}
 .cls.sel{border-color:#e9c46a;background:#2a1f10;color:#fff;box-shadow:inset 0 0 10px #8a5a00}
 .desc{font-size:11px;color:#a8946e;min-height:30px;margin-top:6px;line-height:1.4}
 .fac{display:flex;gap:6px}.fac button{flex:1}
+.bots{display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:6px}
+select{width:100%;padding:8px 6px;background:#0c0905;border:1px solid #6b5430;color:#fff;font:13px Tahoma,sans-serif;outline:none}
+select:focus{border-color:#e9c46a}
 button{background:linear-gradient(#5a4524,#3a2c16);border:1px solid #a88a4a;color:#f0e0b0;padding:9px 12px;font:bold 13px Tahoma,sans-serif;
  cursor:pointer;text-transform:uppercase;letter-spacing:1px}
 button:hover{background:linear-gradient(#6e5530,#4a381c);color:#fff}
@@ -49,6 +52,12 @@ button:disabled{opacity:.5;cursor:default}
  <div class="desc" id="clsDesc"></div>
  <label>Facción</label>
  <div class="fac"><button id="facC" class="on" style="color:#7ab8ff">Ciudadano</button><button id="facK" style="color:#ff6b5b">Criminal</button></div>
+ <label>Bots al crear sala (los equipos son humanos contra bots)</label>
+ <div class="bots">
+  <select id="botN"><option value="0">Sin bots · todos contra todos</option><option value="1">1 bot</option><option value="2" selected>2 bots (2 vs 2)</option><option value="3">3 bots</option><option value="4">4 bots</option></select>
+  <select id="botLvl"><option value="facil">Fácil</option><option value="normal" selected>Normal</option><option value="dificil">Difícil</option></select>
+  <select id="botCls"><option value="mago">Magos</option><option value="mix">Mezcla</option><option value="clerigo">Clérigos</option><option value="paladin">Paladines</option><option value="asesino">Asesinos</option><option value="guerrero">Guerreros</option></select>
+ </div>
  <div class="row"><button id="btnCreate">Crear sala</button></div>
  <div class="row"><input id="joinCode" type="text" maxlength="5" placeholder="CÓDIGO" autocomplete="off"><button id="btnJoin">Unirse</button></div>
  <div id="status"></div>
@@ -620,6 +629,7 @@ let sc=1, offX=0, offY=0, dpr=1;
 let started=false, me=null, isHost=false, roomCode='', myId='';
 const players=new Map();          // id -> personaje (todos menos yo)
 const MAX_PLAYERS=8;
+let teamMode=false;               // con bots: equipo H (humanos) contra B (bots)
 let tab=0, selSlot=0, selSpell=0, targeting=false, typing=false, chatBuf='';
 let lastSpell=-9, lastHit=-9, nextTick=0;
 const lastPot={key:-9,click:-9};   // intervalos separados: teclado y click van por acciones distintas
@@ -634,7 +644,8 @@ function newChar(o){
   const C=CLASSES[o.cls];
   return {id:o.id,name:o.name,cls:o.cls,fac:o.fac,tx:o.x,ty:o.y,fx:o.x,fy:o.y,prog:1,moving:false,dir:o.d||0,stepPar:0,
     hp:C.hp,mhp:C.hp,mp:C.mp,mmp:C.mp,en:C.en,men:C.en,dead:!!o.dead,para:0,inmo:0,invis:!!o.inv,invisUntil:0,
-    med:!!o.med,medStart:0,atkUntil:0,say:null,reviveAt:0,kills:o.k|0,deaths:o.dd|0};
+    med:!!o.med,medStart:0,atkUntil:0,say:null,reviveAt:0,kills:o.k|0,deaths:o.dd|0,
+    team:o.team||null,bot:!!o.bot,lastSpell:-9,lastHit:-9,lastPot:{key:-9,click:-9},stDirty:true,lastSt:0};
 }
 function rpos(c){ if(!c.moving) return [c.tx,c.ty]; return [c.fx+(c.tx-c.fx)*c.prog, c.fy+(c.ty-c.fy)*c.prog]; }
 function occupies(c,x,y){
@@ -657,11 +668,18 @@ function pickChar(wx,wy,withDead){
   }
   return best;
 }
-function freeSpawn(){
-  let best=SPAWN[0], bd=-1;
-  for(const s of SPAWN){
+const TEAM_SPAWN={H:[0,2,6,4],B:[1,3,7,5]};
+const isAlly=(a,b)=>!!(a&&b&&a!==b&&a.team&&a.team===b.team);
+function freeSpawn(team){
+  const list=team&&TEAM_SPAWN[team]?TEAM_SPAWN[team].map(i=>SPAWN[i]):SPAWN;
+  let best=list[0], bd=-1;
+  for(const s of list){
     let d=999;
-    for(const c of allChars()){ if(c===me&&!started) continue; d=Math.min(d,Math.abs(c.tx-s.x)+Math.abs(c.ty-s.y)); }
+    for(const c of allChars()){
+      if((c===me&&!started)||c.dead) continue;
+      const k=Math.abs(c.tx-s.x)+Math.abs(c.ty-s.y);
+      d=Math.min(d,isAlly(c,{team})?(k===0?0:99):k);
+    }
     d+=Math.random()*3;
     if(d>bd){bd=d;best=s}
   }
@@ -683,14 +701,18 @@ function say(c,txt,col,dur){c.say={txt,col,until:now()+(dur||2.6)}}
 const LOCAL=location.hash==='#local';
 const Net={peer:null,host:null,links:new Map(),bc:null,connected:false,pingTimer:0,nextPid:1,lid:''};
 function rawSend(link,o){ try{ link.send(o) }catch(e){} }
-function netSend(o){
-  if(!started) return;
-  o.from=myId;
-  if(isHost){
-    if(o.to){ const L=Net.links.get(o.to); if(L) rawSend(L,o); }
-    else for(const L of Net.links.values()) rawSend(L,o);
-  } else if(Net.host&&Net.connected) rawSend(Net.host,o);
+function route(o){
+  if(!isHost){ if(Net.host&&Net.connected) rawSend(Net.host,o); return; }
+  if(o.to){
+    if(o.to===myId) queueMicrotask(()=>onMsg(o));
+    else { const b=players.get(o.to); if(b&&b.bot) queueMicrotask(()=>botMsg(b,o)); else { const L=Net.links.get(o.to); if(L) rawSend(L,o); } }
+  } else {
+    for(const [pid,L] of Net.links) if(pid!==o.from) rawSend(L,o);
+    if(o.from!==myId) queueMicrotask(()=>onMsg(o));
+  }
 }
+function netSend(o){ if(!started) return; o.from=myId; route(o); }
+function sendFrom(c,o){ o.from=c.id; route(o); }
 function genCode(){const A='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let s='';for(let i=0;i<5;i++)s+=A[Math.floor(Math.random()*A.length)];return s}
 function lobbyStatus(t,err){const s=$('#status');s.textContent=t;s.className=err?'err':''}
 function setLobbyBusy(b){$('#btnCreate').disabled=b;$('#btnJoin').disabled=b}
@@ -727,18 +749,18 @@ function hostRoom(){
     else logm('Error de red: '+(e.type||e.message),COL.dmg);
   });
 }
-function rosterEntry(c){return {id:c.id,name:c.name,cls:c.cls,fac:c.fac,x:c.tx,y:c.ty,d:c.dir,dead:c.dead?1:0,inv:c.invis?1:0,med:c.med?1:0,k:c.kills,dd:c.deaths}}
+function rosterEntry(c){return {id:c.id,name:c.name,cls:c.cls,fac:c.fac,x:c.tx,y:c.ty,d:c.dir,dead:c.dead?1:0,inv:c.invis?1:0,med:c.med?1:0,k:c.kills,dd:c.deaths,team:c.team,bot:c.bot?1:0}}
 function hostReceive(L,m){
   if(!m||!m.t) return;
   if(m.t==='hi'){
     if(L.pid) return;
     if(players.size+1>=MAX_PLAYERS){ rawSend(L,{t:'full'}); setTimeout(()=>L.close(),800); return; }
     const pid='p'+(Net.nextPid++); L.pid=pid; Net.links.set(pid,L);
-    const sp=freeSpawn();
-    const c=newChar({id:pid,name:cleanName(m.name),cls:CLASSES[m.cls]?m.cls:'mago',fac:m.fac==='k'?'k':'c',x:sp.x,y:sp.y});
+    const team=teamMode?'H':null, sp=freeSpawn(team);
+    const c=newChar({id:pid,name:cleanName(m.name),cls:CLASSES[m.cls]?m.cls:'mago',fac:m.fac==='k'?'k':'c',x:sp.x,y:sp.y,team});
     const roster=allChars().map(rosterEntry);
     players.set(pid,c);
-    rawSend(L,{t:'welcome',from:myId,you:pid,sx:sp.x,sy:sp.y,roster});
+    rawSend(L,{t:'welcome',from:myId,you:pid,sx:sp.x,sy:sp.y,roster,tm:teamMode?1:0,team});
     for(const [p2,L2] of Net.links) if(p2!==pid) rawSend(L2,{t:'join',from:myId,...rosterEntry(c)});
     logm(c.name+' ('+CLASSES[c.cls].n+') ha entrado a la arena.',COL.sys); sfx('msg');
     return;
@@ -746,9 +768,7 @@ function hostReceive(L,m){
   if(!L.pid) return;
   m.from=L.pid;                                   // nadie puede hacerse pasar por otro
   if(m.t==='ping'){ rawSend(L,{t:'pong',ts:m.ts}); return; }
-  if(m.to&&m.to!==myId){ const L2=Net.links.get(m.to); if(L2) rawSend(L2,m); return; }
-  if(!m.to) for(const [p2,L2] of Net.links) if(p2!==L.pid) rawSend(L2,m);
-  onMsg(m);
+  route(m);
 }
 function hostDrop(L){
   if(!L.pid||!Net.links.has(L.pid)) return;
@@ -795,7 +815,7 @@ function guestReceive(m){
     case 'welcome':
       if(Net.connected) return;
       Net.connected=true; myId=m.you; netState='Conectado';
-      startGame({x:m.sx,y:m.sy}); me.id=myId;
+      startGame({x:m.sx,y:m.sy}); me.id=myId; teamMode=!!m.tm; me.team=m.team||null;
       for(const r of m.roster) if(r.id!==myId) players.set(r.id,newChar({...r,cls:CLASSES[r.cls]?r.cls:'mago',name:cleanName(r.name)}));
       logm('Hay '+(players.size+1)+' jugadores en la arena.',COL.sys);
       clearInterval(Net.pingTimer); Net.pingTimer=setInterval(()=>netSend({t:'ping',ts:performance.now()}),2000);
@@ -803,7 +823,8 @@ function guestReceive(m){
     case 'full': lobbyStatus('La sala está llena ('+MAX_PLAYERS+' jugadores).',true); setLobbyBusy(false); return;
     case 'pong': ping=Math.round(performance.now()-m.ts); return;
     case 'join': if(m.id!==myId&&!players.has(m.id)){ players.set(m.id,newChar({...m,cls:CLASSES[m.cls]?m.cls:'mago',name:cleanName(m.name)})); logm(cleanName(m.name)+' ('+CLASSES[players.get(m.id).cls].n+') ha entrado a la arena.',COL.sys); sfx('msg'); } return;
-    case 'leave': { const c=players.get(m.id); players.delete(m.id); if(c) logm(c.name+' se ha desconectado.',COL.sys); return; }
+    case 'leave': { const c=players.get(m.id); players.delete(m.id); if(c) logm(c.name+(c.bot?' (bot) salió de la arena.':' se ha desconectado.'),COL.sys); return; }
+    case 'teams': teamMode=!!m.tm; for(const id in m.map){ const c=charById(id); if(c) c.team=m.map[id]; } return;
   }
   if(started) onMsg(m);
 }
@@ -816,6 +837,7 @@ function guestLost(){
 // ---------- mensajes de juego (comunes) ----------
 function onMsg(m){
   const s=players.get(m.from); if(!s) return;
+  if(isHost&&s.bot&&!m.to&&m.t!=='death') return;   // el estado de los bots ya es local en el anfitrión
   const t=now();
   switch(m.t){
     case 'mv': remoteMove(s,m.x|0,m.y|0,m.d|0,m.s); break;
@@ -876,6 +898,7 @@ function castAt(wx,wy){
   targeting=false;
   if(!target){logm('Target inválido.',COL.info);return}
   if(isOffensive(sp)&&target===me){logm('No puedes atacarte a ti mismo.',COL.info);return}
+  if(isOffensive(sp)&&isAlly(me,target)){logm('No puedes atacar a un compañero.',COL.info);return}
   if(Math.abs(target.tx-me.tx)>8||Math.abs(target.ty-me.ty)>6){logm('Estás demasiado lejos.',COL.info);return}
   if(sp.type==='remo'&&target===me&&!me.para&&!me.inmo){logm('No estás paralizado.',COL.info);return}
   if(me.mp<sp.mana){logm('No tienes suficiente maná.',COL.info);return}
@@ -891,41 +914,46 @@ function castAt(wx,wy){
   netSend({t:'fx',k:sp.fx,tgt:target.id,snd:sp.snd});
   let raw=0;
   if(sp.min!=null){ raw=irnd(sp.min,sp.max); if(sp.type==='dmg'||sp.type==='heal') raw=Math.round(raw*C.mag*(sp.type==='heal'&&me.cls==='clerigo'?1.3:1)); }
-  if(target===me){ logm('Has lanzado '+sp.n+' sobre ti mismo.',COL.spell); applySpell(sid,raw,me); }
+  if(target===me){ logm('Has lanzado '+sp.n+' sobre ti mismo.',COL.spell); applySpell(me,sid,raw,me); }
   else { if(sp.type!=='arrow') logm('Has lanzado '+sp.n+' sobre '+target.name+'.',COL.spell); netSend({t:'act',to:target.id,s:sid,raw}); }
   dirty();
 }
 // aplica un hechizo sobre MI personaje
-function applySpell(sid,raw,from){
-  const sp=SPELLS[sid], C=CLASSES[me.cls], self=from===me, fn=from?from.name:'Alguien'; let a=0;
-  if(!self&&sp.type!=='arrow') logm(fn+' ha lanzado '+sp.n+' sobre ti.',COL.spell);
+// aplica un hechizo sobre un personaje local: yo, o un bot si soy el anfitrión
+function applySpell(v,sid,raw,from){
+  const sp=SPELLS[sid], C=CLASSES[v.cls], self=from===v, isMe=v===me, fn=from?from.name:'Alguien', t=now(); let a=0;
+  if(isMe&&!self&&sp.type!=='arrow') logm(fn+' ha lanzado '+sp.n+' sobre ti.',COL.spell);
   switch(sp.type){
-    case 'dmg': a=Math.max(1,Math.round(raw-C.mdef*rnd(.5,1))); me.hp-=a; addFloat(me,'-'+a,'#ff4040'); logm('¡'+fn+' te ha quitado '+a+' puntos de vida!',COL.dmg); break;
-    case 'arrow': a=Math.max(1,Math.round(raw-C.def*rnd(.5,1))); me.hp-=a; addFloat(me,'-'+a,'#ff4040'); addFx('blood',me); logm('¡'+fn+' te ha disparado una flecha por '+a+'!',COL.dmg); sfx('hit'); break;
-    case 'heal': a=Math.max(0,Math.min(raw,me.mhp-me.hp)); me.hp+=a; addFloat(me,'+'+a,'#60ff60'); logm(self?'Te has curado '+a+' puntos de vida.':fn+' te ha curado '+a+' puntos de vida.',COL.heal); break;
-    case 'para': me.para=Math.max(me.para,now()+sp.dur); me.med=false; logm('¡Has sido paralizado!',COL.dmg); break;
-    case 'inmo': me.inmo=Math.max(me.inmo,now()+sp.dur); me.med=false; logm('¡Has sido inmovilizado!',COL.dmg); break;
-    case 'remo': if(me.para||me.inmo){me.para=0;me.inmo=0;logm('Ya no estás paralizado.',COL.info)} break;
-    case 'invis': me.invis=true; me.invisUntil=now()+sp.dur; logm('¡Te has vuelto invisible!',COL.info); break;
+    case 'dmg': a=Math.max(1,Math.round(raw-C.mdef*rnd(.5,1))); v.hp-=a; if(isMe){addFloat(me,'-'+a,'#ff4040'); logm('¡'+fn+' te ha quitado '+a+' puntos de vida!',COL.dmg);} break;
+    case 'arrow': a=Math.max(1,Math.round(raw-C.def*rnd(.5,1))); v.hp-=a; if(isMe){addFloat(me,'-'+a,'#ff4040'); addFx('blood',me); logm('¡'+fn+' te ha disparado una flecha por '+a+'!',COL.dmg); sfx('hit');} break;
+    case 'heal': a=Math.max(0,Math.min(raw,v.mhp-v.hp)); v.hp+=a; if(isMe){addFloat(me,'+'+a,'#60ff60'); logm(self?'Te has curado '+a+' puntos de vida.':fn+' te ha curado '+a+' puntos de vida.',COL.heal);} break;
+    case 'para': v.para=Math.max(v.para||0,t+sp.dur); v.med=false; if(isMe) logm('¡Has sido paralizado!',COL.dmg); break;
+    case 'inmo': v.inmo=Math.max(v.inmo||0,t+sp.dur); v.med=false; if(isMe) logm('¡Has sido inmovilizado!',COL.dmg); break;
+    case 'remo': if(v.para||v.inmo){v.para=0;v.inmo=0;if(isMe)logm('Ya no estás paralizado.',COL.info)} break;
+    case 'invis': v.invis=true; v.invisUntil=t+sp.dur; if(isMe) logm('¡Te has vuelto invisible!',COL.info); break;
   }
-  dirty(); return a;
+  if(isMe) dirty(); else v.stDirty=true;
+  return a;
+}
+function takeHit(v,raw,stab,from){
+  const C=CLASSES[v.cls], a=Math.max(1,Math.round((Number(raw)||0)-irnd(C.def>>1,C.def))), part=PARTS[irnd(0,5)];
+  v.hp-=a;
+  if(v===me){ addFloat(me,'-'+a,'#ff4040'); addFx('blood',me); sfx('hit');
+    logm(stab?'¡'+from.name+' te ha apuñalado por '+a+'!':'¡'+from.name+' te ha pegado en '+part+' por '+a+'!',COL.dmg); dirty(); }
+  else v.stDirty=true;
+  return {a,part};
 }
 function onAct(m,s){
   if(me.dead||!SPELLS[m.s]) return;
-  const a=applySpell(m.s,Number(m.raw)||0,s);
+  const a=applySpell(me,m.s,Number(m.raw)||0,s);
   netSend({t:'res',to:s.id,s:m.s,a});
-  checkDeath(s);
+  checkDeath(me,s);
 }
 function onHit(m,s){
   if(me.dead) return;
-  const C=CLASSES[me.cls];
-  const a=Math.max(1,Math.round((Number(m.raw)||0)-irnd(C.def>>1,C.def)));
-  const part=PARTS[irnd(0,5)];
-  me.hp-=a; addFloat(me,'-'+a,'#ff4040'); addFx('blood',me); sfx('hit');
-  logm(m.stab?'¡'+s.name+' te ha apuñalado por '+a+'!':'¡'+s.name+' te ha pegado en '+part+' por '+a+'!',COL.dmg);
-  dirty();
-  netSend({t:'res',to:s.id,s:'melee',a,p:part,stab:m.stab?1:0});
-  checkDeath(s);
+  const r=takeHit(me,m.raw,m.stab,s);
+  netSend({t:'res',to:s.id,s:'melee',a:r.a,p:r.part,stab:m.stab?1:0});
+  checkDeath(me,s);
 }
 function onRes(m,v){
   const n=v.name, a=m.a|0;
@@ -944,8 +972,9 @@ function onRes(m,v){
     case 'invis': logm(n+' se ha vuelto invisible.',COL.spell); break;
   }
 }
-function checkDeath(from){
-  if(me.dead||me.hp>0) return;
+function checkDeath(v,from){
+  if(v.dead||v.hp>0) return;
+  if(v!==me){ botDie(v,from); return; }
   me.hp=0; me.dead=true; me.reviveAt=now()+REVIVE_TIME; me.med=false; me.para=0; me.inmo=0; me.invis=false; targeting=false;
   me.deaths++;
   const killer=from&&from!==me?from:null;
@@ -955,7 +984,7 @@ function checkDeath(from){
   dirty(); sendState();
 }
 function revive(){
-  const sp=freeSpawn();
+  const sp=freeSpawn(me.team);
   me.dead=false; me.hp=me.mhp; me.mp=me.mmp; me.en=me.men;
   me.tx=me.fx=sp.x; me.ty=me.fy=sp.y; me.prog=1; me.moving=false; me.dir=0;
   if(charAtTile(me.tx,me.ty)){me.ty-=1;me.fy=me.ty}
@@ -971,7 +1000,7 @@ function melee(){
   lastHit=t; me.en-=10; me.atkUntil=t+.25; me.med=false;
   netSend({t:'swing'}); revealIfInvis();
   const target=charAtTile(me.tx+DX[me.dir],me.ty+DY[me.dir]);
-  if(target){
+  if(target&&!isAlly(me,target)){
     const C=CLASSES[me.cls];
     if(Math.random()<C.acc){
       let raw=irnd(C.hit[0],C.hit[1]), stab=false;
@@ -1006,6 +1035,270 @@ function toggleMed(){
   if(me.mp>=me.mmp){logm('Tu maná está completo.',COL.info);return}
   me.med=true; me.medStart=now(); logm('Comienzas a meditar.',COL.info); dirty();
 }
+// =====================================================================
+//  Bots (los simula el anfitrión; para los demás son jugadores normales)
+//  Cada bot tiene dos "manos" como una persona: MOUSE (lanzar, click en
+//  pociones) y TECLADO (U, Ctrl, meditar). La dificultad cambia la
+//  velocidad de las manos, la reacción y los errores.
+// =====================================================================
+const BOT_LEVELS={
+  facil:  {n:'Fácil',  hand:.60, react:1.2, miss:.22, potHp:.40, potMp:.10, slack:[.35,1.1], lethal:false, shared:true,  remoAlly:false, kite:false},
+  normal: {n:'Normal', hand:.36, react:.6,  miss:.08, potHp:.50, potMp:.20, slack:[.08,.42], lethal:true,  shared:false, remoAlly:true,  kite:true, clickHp:.30},
+  dificil:{n:'Difícil',hand:.17, react:.17, miss:0,   potHp:.72, potMp:.30, slack:[0,.06],   lethal:true,  shared:false, remoAlly:true,  kite:true, clickHp:.72, focus:true},
+};
+const BOT_NAMES=['Zoltan','Mordek','Ignis','Valkar','Krator','Sombra','Tremor','Nahuel'];
+const BOT_MIX=['mago','paladin','clerigo','asesino','guerrero'];
+let botSeq=0;
+const dist=(a,b)=>Math.abs(a.tx-b.tx)+Math.abs(a.ty-b.ty);
+const cheb=(a,b)=>Math.max(Math.abs(a.tx-b.tx),Math.abs(a.ty-b.ty));
+const inCastRange=(a,b)=>Math.abs(a.tx-b.tx)<=8&&Math.abs(a.ty-b.ty)<=6;
+function dirTo(a,b){const dx=b.tx-a.tx,dy=b.ty-a.ty;return Math.abs(dx)>=Math.abs(dy)?(dx<0?2:3):(dy<0?1:0)}
+
+function addBot(cls,lvl,team){
+  botSeq++;
+  const id='b'+botSeq, tm=team||'B', sp=freeSpawn(tm);
+  const c=newChar({id,name:BOT_NAMES[(botSeq-1)%BOT_NAMES.length],cls,fac:'k',x:sp.x,y:sp.y,team:tm,bot:1});
+  c.lvl=BOT_LEVELS[lvl]?lvl:'normal';
+  c.brain={mouse:0,keys:0,think:0,paraAt:0,tgt:null,nextStep:0,wander:null};
+  players.set(id,c);
+  for(const L of Net.links.values()) rawSend(L,{t:'join',from:myId,...rosterEntry(c)});
+  logm(c.name+' ('+CLASSES[cls].n+', bot '+BOT_LEVELS[c.lvl].n.toLowerCase()+') ha entrado a la arena.',COL.sys);
+  return c;
+}
+function removeBots(){
+  for(const [id,c] of [...players]) if(c.bot){ players.delete(id); for(const L of Net.links.values()) rawSend(L,{t:'leave',from:myId,id}); }
+}
+// configura bots y equipos (anfitrión). n=0 vuelve a todos contra todos
+function setupBots(n,lvl,cls){
+  removeBots();
+  teamMode=n>0;
+  me.team=teamMode?'H':null;
+  for(const c of players.values()) c.team=teamMode?'H':null;
+  const map={}; for(const c of allChars()) map[c.id]=c.team;
+  for(const L of Net.links.values()) rawSend(L,{t:'teams',from:myId,tm:teamMode?1:0,map});
+  for(let i=0;i<n;i++) addBot(cls==='mix'?BOT_MIX[i%BOT_MIX.length]:cls,lvl,'B');
+  if(n>0) logm('Duelo por equipos: humanos contra '+n+' bot'+(n>1?'s':'')+' ('+BOT_LEVELS[lvl].n.toLowerCase()+').',COL.sys);
+}
+
+function walkable(x,y,self){ if(isBlocked(x,y)) return false; for(const c of allChars()) if(c!==self&&!c.dead&&occupies(c,x,y)) return false; return true; }
+// BFS: dirección del primer paso hacia alguna baldosa que cumpla goal(x,y)
+function bfsStep(b,goal){
+  const W=MW, start=b.ty*W+b.tx, prev=new Int32Array(MW*MH).fill(-1); prev[start]=start;
+  const q=[start];
+  for(let qi=0;qi<q.length;qi++){
+    const cur=q[qi], x=cur%W, y=(cur/W)|0;
+    if(cur!==start&&goal(x,y)){
+      let n=cur; while(prev[n]!==start) n=prev[n];
+      const nx=n%W, ny=(n/W)|0;
+      return nx<b.tx?2:nx>b.tx?3:ny<b.ty?1:0;
+    }
+    for(let d=0;d<4;d++){
+      const nx=x+DX[d], ny=y+DY[d]; if(!inB(nx,ny)) continue;
+      const ni=ny*W+nx; if(prev[ni]!==-1) continue;
+      if(!walkable(nx,ny,b)) continue;
+      prev[ni]=cur; q.push(ni);
+    }
+  }
+  return -1;
+}
+function botFace(b,c){const d=dirTo(b,c); if(b.dir!==d){b.dir=d; sendFrom(b,{t:'mv',x:b.tx,y:b.ty,d})}}
+function botStep(b,d){
+  if(b.moving||b.para||b.inmo) return false;
+  const nx=b.tx+DX[d], ny=b.ty+DY[d];
+  if(!walkable(nx,ny,b)){ if(b.dir!==d){b.dir=d;sendFrom(b,{t:'mv',x:b.tx,y:b.ty,d})} return false; }
+  if(b.med){b.med=false;b.stDirty=true}
+  b.dir=d; b.fx=b.tx; b.fy=b.ty; b.tx=nx; b.ty=ny; b.prog=0; b.moving=true; b.stepPar^=1;
+  sendFrom(b,{t:'mv',x:nx,y:ny,d}); return true;
+}
+function botPot(b,kind,ch){
+  const t=now();
+  if(t-b.lastPot[ch]<CD.pot) return false;
+  if(kind==='potB'&&(b.mmp===0||b.mp>=b.mmp)) return false;
+  if(kind==='potR'&&b.hp>=b.mhp) return false;
+  b.lastPot[ch]=t;
+  if(kind==='potR') b.hp=Math.min(b.mhp,b.hp+30); else b.mp=Math.min(b.mmp,b.mp+Math.round(b.mmp*.03+12));
+  if(near(b)) addFx(kind,b);
+  b.stDirty=true; return true;
+}
+function botCast(b,sid,target){
+  const sp=SPELLS[sid], t=now(), C=CLASSES[b.cls];
+  if(!sp||!target||target.dead||b.mp<sp.mana) return false;
+  if(sp.type==='arrow'&&b.para) return false;
+  if(isOffensive(sp)&&(target===b||isAlly(b,target))) return false;
+  if(!inCastRange(b,target)) return false;
+  b.mp-=sp.mana; b.lastSpell=t; b.med=false;
+  if(isOffensive(sp)&&b.invis) b.invis=false;
+  if(sp.words){ say(b,sp.words,COL.words); sendFrom(b,{t:'say',txt:sp.words,k:'w'}); }
+  if(sp.type==='arrow'&&target!==b) botFace(b,target);
+  addFx(sp.fx,target,b); if(target===me||near(target)) sfx(sp.snd,target===me?1:.7);
+  sendFrom(b,{t:'fx',k:sp.fx,tgt:target.id,snd:sp.snd});
+  let raw=0;
+  if(sp.min!=null){ raw=irnd(sp.min,sp.max); if(sp.type==='dmg'||sp.type==='heal') raw=Math.round(raw*C.mag*(sp.type==='heal'&&b.cls==='clerigo'?1.3:1)); }
+  if(target===me){ applySpell(me,sid,raw,b); checkDeath(me,b); }
+  else if(target.bot){ applySpell(target,sid,raw,b); checkDeath(target,b); }
+  else sendFrom(b,{t:'act',to:target.id,s:sid,raw});
+  b.stDirty=true; return true;
+}
+function botMelee(b,tgt){
+  const t=now(), C=CLASSES[b.cls];
+  if(b.en<10||b.para) return false;
+  if(tgt.tx!==b.tx+DX[b.dir]||tgt.ty!==b.ty+DY[b.dir]) return false;
+  b.lastHit=t; b.en-=10; b.atkUntil=t+.25; b.med=false; if(b.invis) b.invis=false;
+  sendFrom(b,{t:'swing'}); if(near(b)) sfx('swing',.6);
+  if(Math.random()<C.acc){
+    let raw=irnd(C.hit[0],C.hit[1]), stab=false;
+    if(C.stab&&Math.random()<C.stab){raw=Math.round(raw*1.6);stab=true}
+    addFx('blood',tgt);
+    if(tgt===me){ takeHit(me,raw,stab,b); checkDeath(me,b); }
+    else if(tgt.bot){ takeHit(tgt,raw,stab,b); checkDeath(tgt,b); }
+    else sendFrom(b,{t:'hit',to:tgt.id,raw,stab});
+  } else { if(tgt===me) logm('¡'+b.name+' te atacó y falló!',COL.dmg); else if(!tgt.bot) sendFrom(b,{t:'miss',to:tgt.id}); }
+  b.stDirty=true; return true;
+}
+// daño esperado de un hechizo contra ese objetivo (para decidir si remata)
+function expDmg(b,sid,tgt){const sp=SPELLS[sid];return (sp.min+sp.max)/2*CLASSES[b.cls].mag-CLASSES[tgt.cls].mdef*.75}
+function lethalSpell(b,tgt){
+  const S=CLASSES[b.cls].spells;
+  for(const s of ['apoca','descarga','tormenta','flechae','dardo'])
+    if(S.includes(s)&&b.mp>=SPELLS[s].mana&&expDmg(b,s,tgt)>=tgt.hp+(b.lvl==='dificil'?0:8)) return s;
+  return null;
+}
+function botOffense(b,tgt,t){
+  const C=CLASSES[b.cls], S=C.spells, has=s=>S.includes(s)&&b.mp>=SPELLS[s].mana;
+  const tParal=!!(tgt.para||tgt.inmo), d=cheb(b,tgt);
+  if(b.cls==='guerrero') return (d>1||Math.random()<.25)&&t-b.lastSpell>=CD.arrow?['flecha',tgt]:null;
+  if(b.cls==='mago'||b.cls==='clerigo'){
+    if(b.lvl==='facil'){ const o=['dardo','tormenta','descarga','apoca','paralizar'].filter(has); return o.length?[o[irnd(0,o.length-1)],tgt]:null; }
+    // paralizar → apoca → apoca (descarga/tormenta si no alcanza el maná)
+    if(!tParal&&has('paralizar')&&b.mp>=SPELLS.paralizar.mana+(b.lvl==='dificil'?460:0)) return ['paralizar',tgt];
+    for(const s of ['apoca','descarga','tormenta']) if(has(s)) return [s,tgt];
+    return null;
+  }
+  // paladín / asesino: inmovilizar y acercarse a pegar
+  if(b.cls==='asesino'&&b.lvl!=='facil'&&!b.invis&&has('invis')&&d>=4&&Math.random()<.4) return ['invis',b];
+  if(!tParal&&has('inmo')&&d>=2) return ['inmo',tgt];
+  if(d>=2&&has('tormenta')&&b.mp>=SPELLS.tormenta.mana+SPELLS.remo.mana&&Math.random()<.6) return ['tormenta',tgt];
+  return null;
+}
+function botThink(b,t){
+  const L=BOT_LEVELS[b.lvl], C=CLASSES[b.cls], br=b.brain;
+  const foes=allChars().filter(c=>c!==b&&!c.dead&&!isAlly(b,c));
+  const seen=foes.filter(c=>!c.invis);
+  let tgt=br.tgt?seen.find(c=>c.id===br.tgt):null;
+  if(b.lvl!=='facil'){
+    const mate=allChars().find(c=>c.bot&&c!==b&&isAlly(b,c)&&!c.dead&&c.brain.tgt&&seen.some(x=>x.id===c.brain.tgt&&inCastRange(b,x)));
+    if(mate&&(!tgt||Math.random()<.3)) tgt=seen.find(x=>x.id===mate.brain.tgt);
+  }
+  if(!tgt||Math.random()<.04){
+    if(b.lvl==='dificil'){ const r=seen.filter(c=>inCastRange(b,c)); tgt=(r.length?r:seen).sort((x,y)=>(x.hp/x.mhp)-(y.hp/y.mhp)||dist(b,x)-dist(b,y))[0]||null; }
+    else tgt=seen.sort((x,y)=>dist(b,x)-dist(b,y))[0]||null;
+  }
+  br.tgt=tgt?tgt.id:null;
+  const paraMe=!!(b.para||b.inmo);
+  if(paraMe){ if(!br.paraAt) br.paraAt=t; } else br.paraAt=0;
+  const hpR=b.hp/b.mhp, mpR=b.mmp?b.mp/b.mmp:1;
+  const slack=()=>rnd(L.slack[0],L.slack[1]);
+  const useMouse=()=>{br.mouse=t+L.hand+slack(); if(L.shared) br.keys=br.mouse;};
+  const useKeys=()=>{br.keys=t+L.hand+slack(); if(L.shared) br.mouse=br.keys;};
+  const nearFoe=foes.some(c=>cheb(b,c)<=5);
+  const meleeCls=b.cls!=='mago';
+
+  // ---------- TECLADO ----------
+  if(t>=br.keys){
+    let did=false;
+    if(hpR<L.potHp) did=botPot(b,'potR','key');
+    else if(meleeCls&&tgt&&dist(b,tgt)===1&&t-b.lastHit>=CD.hit&&t-b.lastSpell>=CD.combo&&!b.para&&b.en>=10){ botFace(b,tgt); did=botMelee(b,tgt); }
+    else if(b.mmp&&mpR<L.potMp) did=botPot(b,'potB','key');
+    else if(b.mmp&&mpR<.5&&!nearFoe&&!b.med&&!b.moving){ b.med=true; b.medStart=t; b.stDirty=true; did=true; }
+    else if(b.lvl!=='facil'&&b.mmp&&mpR<.85&&hpR>.8) did=botPot(b,'potB','key');
+    else if(b.lvl==='dificil'&&hpR<.93) did=botPot(b,'potR','key');
+    if(did) useKeys();
+  }
+  // ---------- MOUSE ----------
+  if(t>=br.mouse){
+    const canSpell=t-b.lastSpell>=CD.spell&&t-b.lastHit>=CD.combo;
+    let act=null;
+    if(canSpell){
+      // paralizado: me remuevo, salvo que con un hechizo más el enemigo casi seguro muera
+      if(paraMe&&C.spells.includes('remo')&&t-br.paraAt>=L.react){
+        const k=L.lethal&&tgt&&inCastRange(b,tgt)?lethalSpell(b,tgt):null;
+        act=k?[k,tgt]:(b.mp>=SPELLS.remo.mana?['remo',b]:null);
+      }
+      if(!act&&L.remoAlly&&C.spells.includes('remo')&&b.mp>=SPELLS.remo.mana+300){
+        const al=allChars().find(c=>c!==b&&isAlly(b,c)&&!c.dead&&(c.para||c.inmo)&&inCastRange(b,c)&&(!c.bot||t-c.brain.paraAt>.8));
+        if(al) act=['remo',al];
+      }
+      if(!act&&!paraMe&&tgt&&L.lethal){ const k=lethalSpell(b,tgt); if(k&&inCastRange(b,tgt)) act=[k,tgt]; }
+      if(!act&&hpR<.35&&b.cls!=='mago'&&C.spells.includes('chg')&&b.mp>=SPELLS.chg.mana&&Math.random()<.5) act=['chg',b];
+      if(!act&&tgt&&inCastRange(b,tgt)&&!(paraMe&&b.lvl!=='facil'&&C.spells.includes('remo'))) act=botOffense(b,tgt,t);
+    }
+    if(act){
+      if(act[1]!==b&&Math.random()<L.miss) useMouse();                 // click errado
+      else if(botCast(b,act[0],act[1])) useMouse();
+    } else if(!L.shared){                                              // mano libre: pociones por click
+      if(hpR<(L.clickHp||L.potHp)&&botPot(b,'potR','click')) useMouse();
+      else if(b.mmp&&mpR<L.potMp+.1&&botPot(b,'potB','click')) useMouse();
+      else if(b.lvl==='dificil'&&b.mmp&&mpR<.6&&hpR>.75&&botPot(b,'potB','click')) useMouse();
+    }
+  }
+}
+function botMove(b,t){
+  const br=b.brain;
+  if(b.moving||b.para||b.inmo||t<br.nextStep) return;
+  br.nextStep=t+(b.lvl==='facil'?rnd(.05,.4):b.lvl==='normal'?rnd(0,.12):0);
+  const tgt=br.tgt?charById(br.tgt):null;
+  const foes=allChars().filter(c=>c!==b&&!c.dead&&!isAlly(b,c));
+  if(b.med){ if(foes.some(c=>cheb(b,c)<=4)){b.med=false;b.stDirty=true} else return; }
+  let dir=-1;
+  if(!tgt||tgt.dead||tgt.invis){
+    if(!br.wander||Math.random()<.02) br.wander={x:irnd(8,27),y:irnd(8,19)};
+    if(Math.abs(b.tx-br.wander.x)+Math.abs(b.ty-br.wander.y)>2) dir=bfsStep(b,(x,y)=>Math.abs(x-br.wander.x)+Math.abs(y-br.wander.y)<=1);
+  } else {
+    const L=BOT_LEVELS[b.lvl], d=cheb(b,tgt);
+    const melee=b.cls==='paladin'||b.cls==='asesino'||b.cls==='guerrero'||(b.cls==='clerigo'&&b.mp<460);
+    if(melee){ if(dist(b,tgt)>1) dir=bfsStep(b,(x,y)=>Math.abs(x-tgt.tx)+Math.abs(y-tgt.ty)===1); }
+    else {
+      const lo=L.kite?4:2, hi=L.kite?6:7;
+      if(!inCastRange(b,tgt)||d>hi) dir=bfsStep(b,(x,y)=>Math.abs(x-tgt.tx)<=6&&Math.abs(y-tgt.ty)<=4);
+      else if(d<lo){
+        let bd=d;
+        for(let k=0;k<4;k++){const nx=b.tx+DX[k],ny=b.ty+DY[k]; if(!walkable(nx,ny,b)) continue; const nd=Math.max(Math.abs(nx-tgt.tx),Math.abs(ny-tgt.ty)); if(nd>bd&&Math.abs(nx-tgt.tx)<=8&&Math.abs(ny-tgt.ty)<=6){bd=nd;dir=k}}
+      } else if(b.lvl==='dificil'&&Math.random()<.12) dir=irnd(0,3);   // se mueve para no quedar quieto
+    }
+  }
+  if(dir>=0) botStep(b,dir);
+}
+function botDie(b,from){
+  b.hp=0; b.dead=true; b.reviveAt=now()+REVIVE_TIME; b.med=false; b.para=0; b.inmo=0; b.invis=false; b.stDirty=true;
+  sendFrom(b,{t:'death',killer:from&&from!==b?from.id:null});
+}
+function botRevive(b){
+  const sp=freeSpawn(b.team);
+  b.dead=false; b.hp=b.mhp; b.mp=b.mmp; b.en=b.men; b.tx=b.fx=sp.x; b.ty=b.fy=sp.y; b.prog=1; b.moving=false; b.brain.paraAt=0;
+  addFx('revive',b); sendFrom(b,{t:'mv',x:b.tx,y:b.ty,d:b.dir,s:1}); b.stDirty=true;
+}
+function botMsg(b,m){
+  const s=charById(m.from); if(!s||b.dead) return;
+  if(m.t==='act'&&SPELLS[m.s]){ const a=applySpell(b,m.s,Number(m.raw)||0,s); sendFrom(b,{t:'res',to:s.id,s:m.s,a}); checkDeath(b,s); }
+  else if(m.t==='hit'){ const r=takeHit(b,m.raw,m.stab,s); sendFrom(b,{t:'res',to:s.id,s:'melee',a:r.a,p:r.part,stab:m.stab?1:0}); checkDeath(b,s); }
+}
+function botUpdate(b,t){
+  if(b.para&&t>b.para){b.para=0;b.stDirty=true}
+  if(b.inmo&&t>b.inmo){b.inmo=0;b.stDirty=true}
+  if(b.invis&&t>b.invisUntil){b.invis=false;b.stDirty=true}
+  if(t>=(b.nextTick||0)){
+    b.nextTick=t+.25;
+    if(!b.dead){ b.en=Math.min(b.men,b.en+2);
+      if(b.med&&t-b.medStart>.8){ b.mp=Math.min(b.mmp,b.mp+Math.max(8,b.mmp*.025)); b.stDirty=true; if(b.mp>=b.mmp) b.med=false; } }
+  }
+  if(b.dead){ if(t>=b.reviveAt) botRevive(b); }
+  else { if(t>=b.brain.think){ b.brain.think=t+.05; botThink(b,t); } botMove(b,t); }
+  if((b.stDirty&&t-b.lastSt>.1)||t-b.lastSt>1){
+    b.lastSt=t; b.stDirty=false;
+    sendFrom(b,{t:'st',hp:Math.round(b.hp),mhp:b.mhp,mp:Math.round(b.mp),mmp:b.mmp,inv:b.invis?1:0,par:b.para?1:0,inm:b.inmo?1:0,med:b.med?1:0,dead:b.dead?1:0});
+  }
+}
+
 // =====================================================================
 //  Efectos visuales
 // =====================================================================
@@ -1139,6 +1432,7 @@ function wrap(s,maxW,font){
   for(const w of words){const test=cur?cur+' '+w:w; if(ctx.measureText(test).width>maxW&&cur){lines.push(cur);cur=w}else cur=test}
   if(cur)lines.push(cur); return lines;
 }
+function nameColor(c){ if(teamMode) return c===me||isAlly(me,c)?'#3d9bff':'#ff3a2a'; return c.fac==='k'?'#ff3a2a':'#3d9bff'; }
 function frameFor(c){ if(!c.moving) return 0; return c.prog<.5?(c.stepPar?1:3):0; }
 
 function drawWorld(t){
@@ -1176,7 +1470,7 @@ function drawWorld(t){
   for(const c of chars){
     if(c!==me&&c.invis&&!c.dead) continue;
     const [cx,cy]=rpos(c); const sx=SX(cx)+16, sy=SY(cy)+32;
-    const col=c.dead?'#c0c0c0':c.fac==='k'?'#ff3a2a':'#3d9bff';
+    const col=c.dead?'#c0c0c0':nameColor(c);
     txt(c.name,sx,sy+12,col,'bold 11px Tahoma, Verdana, sans-serif','center');
     txt('<'+CLASSES[c.cls].n+'>',sx,sy+24,col,'10px Tahoma, Verdana, sans-serif','center');
   }
@@ -1332,14 +1626,16 @@ function drawPanel(t){
   st.forEach((s,i)=>txt(s[0],584+(i%2)*104,406,s[1],'bold 10px Tahoma, sans-serif'));
   if(!st.length) txt('Sano',584,406,'#6a5a40','10px Tahoma, sans-serif');
   // tabla de jugadores
-  const list=allChars().sort((a,b)=>b.kills-a.kills||a.deaths-b.deaths);
-  txt('Jugadores '+list.length+'/'+MAX_PLAYERS,584,439,'#c8b48a','bold 11px Tahoma, sans-serif');
+  const list=allChars().sort((a,b)=>(teamMode?(b.team===me.team)-(a.team===me.team):0)||b.kills-a.kills||a.deaths-b.deaths);
+  if(teamMode){ const kH=allChars().filter(c=>c.team==='H').reduce((n,c)=>n+c.kills,0), kB=allChars().filter(c=>c.team==='B').reduce((n,c)=>n+c.kills,0);
+    txt('Humanos '+kH,584,439,'#6ab0ff','bold 11px Tahoma, sans-serif'); txt('-',662,439,'#c8b48a','bold 11px Tahoma, sans-serif'); txt(kB+' Bots',672,439,'#ff5a4a','bold 11px Tahoma, sans-serif'); }
+  else txt('Jugadores '+list.length+'/'+MAX_PLAYERS,584,439,'#c8b48a','bold 11px Tahoma, sans-serif');
   txt('M / D',774,439,'#c8b48a','bold 10px Tahoma, sans-serif','right');
   ctx.fillStyle='#4a3a20'; ctx.fillRect(580,443,198,1);
   list.slice(0,6).forEach((c,i)=>{
-    const y=456+i*11.5, col=c.dead?'#8a8a8a':c.fac==='k'?'#ff5a4a':'#6ab0ff';
+    const y=456+i*11.5, col=c.dead?'#8a8a8a':nameColor(c);
     txt((c===me?'» ':'')+c.name,584,y,col,(c===me?'bold ':'')+'10px Tahoma, sans-serif');
-    txt(CLASSES[c.cls].n,700,y,'#8a7a5a','9px Tahoma, sans-serif','center');
+    txt(CLASSES[c.cls].n+(c.bot?' (bot)':''),704,y,'#8a7a5a','9px Tahoma, sans-serif','center');
     txt(c.kills+' / '+c.deaths,774,y,'#e0d0a0','10px Tahoma, sans-serif','right');
   });
   if(list.length>6) txt('y '+(list.length-6)+' más...',679,516,'#7d6c50','9px Tahoma, sans-serif','center');
@@ -1392,6 +1688,7 @@ function stepChar(c,dt,local){
 }
 function update(dt,t){
   stepChar(me,dt,true); for(const c of players.values()) stepChar(c,dt,false);
+  if(isHost) for(const c of players.values()) if(c.bot) botUpdate(c,t);
   if(me.para&&t>me.para){me.para=0;logm('Ya no estás paralizado.',COL.info);dirty()}
   if(me.inmo&&t>me.inmo){me.inmo=0;logm('Ya no estás inmovilizado.',COL.info);dirty()}
   if(me.invis&&t>me.invisUntil){me.invis=false;logm('Has vuelto a ser visible.',COL.info);dirty()}
@@ -1440,7 +1737,7 @@ addEventListener('keydown',e=>{
   if(typing){
     e.preventDefault();
     if(k==='Enter'){const s=chatBuf.trim(); chatBuf=''; typing=false;
-      if(s){ if(s.toLowerCase()==='/meditar') toggleMed(); else { say(me,s,COL.chat,6); logm(me.name+': '+s,COL.chat); netSend({t:'say',txt:s,k:'c'}); } } }
+      if(s){ if(s.toLowerCase()==='/meditar') toggleMed(); else if(/^\/bots?\b/i.test(s)) botCommand(s); else { say(me,s,COL.chat,6); logm(me.name+': '+s,COL.chat); netSend({t:'say',txt:s,k:'c'}); } } }
     else if(k==='Escape'){typing=false;chatBuf=''}
     else if(k==='Backspace') chatBuf=chatBuf.slice(0,-1);
     else if(k.length===1&&chatBuf.length<90) chatBuf+=k;
@@ -1467,6 +1764,16 @@ addEventListener('keydown',e=>{
 });
 addEventListener('keyup',e=>{ const i=held.indexOf(e.code); if(i>=0) held.splice(i,1); });
 addEventListener('blur',()=>{held=[]});
+function botCommand(s){
+  if(!isHost){logm('Solo quien creó la sala puede manejar los bots.',COL.info);return}
+  const w=s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').split(/\s+/).slice(1);
+  let n=null,lvl='normal',cls='mago';
+  for(const x of w){ if(/^\d+$/.test(x)) n=Math.min(6,+x); else if(BOT_LEVELS[x]) lvl=x; else if(CLASSES[x]) cls=x; else if(x==='mezcla'||x==='mix') cls='mix'; }
+  if(n==null){logm('Uso: /bots <cantidad> <facil|normal|dificil> <mago|clerigo|paladin|asesino|guerrero|mezcla>   (ej: /bots 2 dificil mago, /bots 0 para sacarlos)',COL.sys);return}
+  if(players.size-[...players.values()].filter(c=>c.bot).length+1+n>MAX_PLAYERS){logm('No entran tantos bots en la sala.',COL.info);return}
+  setupBots(n,lvl,cls);
+  if(n===0) logm('Bots eliminados. Todos contra todos.',COL.sys);
+}
 function toLogical(e){ return [(e.clientX*dpr-offX)/sc,(e.clientY*dpr-offY)/sc]; }
 let dragList=null, dragItem=null, lastInvClick={i:-1,t:0}, lastClickUse=0;
 // orden por defecto: abajo de todo Remover, arriba Inmovilizar, Apocalipsis, Descarga; el resto arriba
@@ -1563,7 +1870,7 @@ canvas.addEventListener('dblclick',e=>{
 // =====================================================================
 let lobbyCls='mago', lobbyFac='c';
 function buildLobby(){
-  try{const s=JSON.parse(localStorage.getItem('aoArena')||'{}'); if(s.name)$('#name').value=s.name; if(CLASSES[s.cls])lobbyCls=s.cls; if(s.fac)lobbyFac=s.fac}catch(e){}
+  try{const s=JSON.parse(localStorage.getItem('aoArena')||'{}'); if(s.name)$('#name').value=s.name; if(CLASSES[s.cls])lobbyCls=s.cls; if(s.fac)lobbyFac=s.fac; if(s.bn!=null){$('#botN').value=s.bn;$('#botLvl').value=s.bl;$('#botCls').value=s.bc}}catch(e){}
   const box=$('#classes');
   for(const k of CLS_ORDER){
     const d=document.createElement('div'); d.className='cls'; d.dataset.k=k;
@@ -1581,7 +1888,7 @@ function buildLobby(){
   const go=(fn)=>{
     const name=$('#name').value.trim().replace(/[<>]/g,'').slice(0,14);
     if(!name){lobbyStatus('Escribí un nombre.',true);return false}
-    try{localStorage.setItem('aoArena',JSON.stringify({name,cls:lobbyCls,fac:lobbyFac}))}catch(e){}
+    try{localStorage.setItem('aoArena',JSON.stringify({name,cls:lobbyCls,fac:lobbyFac,bn:$('#botN').value,bl:$('#botLvl').value,bc:$('#botCls').value}))}catch(e){}
     audioInit(); enterFS(); fn(name); return true;
   };
   $('#btnCreate').onclick=()=>go(()=>hostRoom());
@@ -1606,6 +1913,7 @@ function startGame(sp){
   logm('Bienvenido a la Arena, '+name+'.',COL.sys);
   if(isHost) logm('Sala creada (hasta '+MAX_PLAYERS+' jugadores, todos contra todos). Pasales este código: '+roomCode,COL.sys);
   logm('WASD para caminar, Ctrl para pegar, Espacio para usar. Elegí un hechizo y apretá LANZAR (o L).',COL.info);
+  if(isHost){ const n=+$('#botN').value; if(n>0) setupBots(n,$('#botLvl').value,$('#botCls').value); logm('Podés cambiar los bots escribiendo /bots en el chat (ej: /bots 2 dificil mago).',COL.info); }
   lastT=now(); requestAnimationFrame(loop);
 }
 
